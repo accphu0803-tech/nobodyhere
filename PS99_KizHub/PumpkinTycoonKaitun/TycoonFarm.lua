@@ -161,35 +161,50 @@ local FARM_AREAS = {
     [5] = {
         name = "Area 5 (Golden Grove)",
         displayName = "Golden Grove",
+        pathBtn = "Path_5",
+        zoneBtn = "GoldenGrove_Zone",
         eggAttr = "GoldenGrove_Egg",
         eggBtn = "GoldenGrove_Egg",
+        pedIndex = 5,
     },
     [4] = {
         name = "Area 4 (Cider Mill)",
         displayName = "Cider Mill",
+        pathBtn = "Path_4",
+        zoneBtn = "CiderMill_Zone",
         eggAttr = "CiderMill_Egg",
         eggBtn = "CiderMill_Egg",
+        pedIndex = 4,
     },
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
         offset = Vector3.new(-200.28, 0.08, -52.88),
+        pathBtn = "Path_3",
+        zoneBtn = "HayrideHill_Zone",
         eggAttr = "HayrideHill_Egg",
         eggBtn = "HayrideHill_Egg",
+        pedIndex = 3,
     },
     [2] = {
         name = "Area 2 (Apple Orchard)",
         displayName = "Apple Orchard",
         offset = Vector3.new(-138.68, 4.63, 161.97),
+        pathBtn = "Path_2",
+        zoneBtn = "AppleOrchard_Zone",
         eggAttr = "AppleOrchard_Egg",
         eggBtn = "AppleOrchard_Egg",
+        pedIndex = 2,
     },
     [1] = {
         name = "Area 1 (Cocoa Cabin)",
         displayName = "Cocoa Cabin",
         offset = Vector3.new(183.04, 3.86, 125.91),
+        pathBtn = nil,
+        zoneBtn = "CocoaCabin_Zone",
         eggAttr = "CocoaCabin_Egg",
         eggBtn = "CocoaCabin_Egg",
+        pedIndex = 1,
     },
 }
 
@@ -204,14 +219,20 @@ function TycoonFarm.getActiveAreaIndex()
     local things = workspace:FindFirstChild("__THINGS")
     local customEggs = things and things:FindFirstChild("CustomEggs")
 
+    local function isButtonOwned(btnId)
+        if not btnId then return false end
+        if buttonsState[btnId] == true then return true end
+        if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, btnId) then
+            return true
+        end
+        return false
+    end
+
     -- Quét từ bãi cao nhất (Bãi 5) xuống bãi thấp nhất (Bãi 1)
     for zoneIdx = 5, 1, -1 do
         local area = FARM_AREAS[zoneIdx]
-        -- 1. Kiểm tra đã sở hữu nút mở Egg của bãi đó chưa
-        if buttonsState[area.eggBtn] == true then
-            return zoneIdx
-        end
-        if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, area.eggBtn) then
+        -- 1. Kiểm tra đã sở hữu nút mở Egg hoặc nút Zone hoặc nút Path dẫn đến bãi đó
+        if isButtonOwned(area.eggBtn) or isButtonOwned(area.zoneBtn) or isButtonOwned(area.pathBtn) then
             return zoneIdx
         end
 
@@ -354,6 +375,9 @@ function TycoonFarm.findActiveBigPumpkin()
     initGameLibs()
     local plotId = plot:GetId()
     local sweetPos = TycoonFarm.getSweetPos()
+    if not sweetPos then return nil end
+
+    local activeArea = TycoonFarm.getActiveAreaIndex()
     local bestPumpkin = nil
     local maxRung = -1
 
@@ -362,17 +386,17 @@ function TycoonFarm.findActiveBigPumpkin()
         local isTycoon = (brk.parentID == "PumpkinTycoon") or (brk.model and brk.model:GetAttribute("ParentID") == "PumpkinTycoon")
         if not isTycoon then return end
 
-        local brkPlot = brk.clientAttributes.Plot or (brk.model and brk.model:GetAttribute("Plot"))
-        local distSweet = sweetPos and (brk.position - sweetPos).Magnitude or 9999
-        local isMyPlot = (brkPlot == plotId) or (distSweet < 350)
+        local distSweet = (brk.position - sweetPos).Magnitude
 
-        if isMyPlot then
+        -- CHỈ ĐÁNH BÍ NGÔ NẰM TRONG BÃI HIỆN TẠI (distSweet <= 110 studs)
+        -- Tuyệt đối không nhắm vào Pedestal 1 (Cocoa Cabin Bậc 1) ở đầu đảo khi đang farm Bãi 2, 3, 4, 5
+        if distSweet <= 110 then
             local rung = tonumber(brk.clientAttributes.Rung) or (brk.model and tonumber(brk.model:GetAttribute("Rung"))) or 1
             local petName = brk.clientAttributes.PetName or (brk.model and brk.model:GetAttribute("PetName")) or (brk.model and brk.model.Name)
             if K and K.ROSTER_RUNG and petName and K.ROSTER_RUNG[petName] then
                 rung = math.max(rung, K.ROSTER_RUNG[petName])
             end
-            local pedIndex = brk.clientAttributes.PumpkinPedestal or brk.clientAttributes.Pedestal or 1
+            local pedIndex = brk.clientAttributes.PumpkinPedestal or brk.clientAttributes.Pedestal or activeArea
 
             if rung > maxRung then
                 maxRung = rung
@@ -499,9 +523,9 @@ function TycoonFarm.farmBestPatchTick(state)
     -- Kích hoạt Auto Farm miễn phí của event
     TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)
 
-    -- Nếu không có excursion (không đi phá bí ngô ở bệ xa) và cách sweetPos > 8 studs -> Di chuyển về sweetPos
+    -- Luôn đảm bảo nhân vật đứng tại sweetPos của bãi farm hiện tại (nếu lệch quá 8 studs -> Teleport ngay)
     local char, hrp = getCharacterParts()
-    if state and state.excursion == nil and hrp and (hrp.Position - sweetPos).Magnitude > 8 then
+    if hrp and (hrp.Position - sweetPos).Magnitude > 8 then
         TycoonFarm.moveTo(sweetPos)
     end
 

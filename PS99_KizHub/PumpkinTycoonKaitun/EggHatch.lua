@@ -317,10 +317,30 @@ function EggHatch.hatchBestEggTick(state)
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
 
-    local eggCost = EGG_UNIT_COSTS[targetEgg.zoneIndex or 1] or 200
-    if coins < eggCost then return end
+    local activeZone = (TycoonFarm and type(TycoonFarm.getActiveAreaIndex) == "function" and TycoonFarm.getActiveAreaIndex()) or 1
+    -- Nếu egg tìm được thuộc bãi cũ hơn bãi farm hiện tại -> Không lùi về bãi cũ, ưu tiên đứng bãi mới farm tiền mua egg bãi mới
+    if (targetEgg.zoneIndex or 1) < activeZone then
+        state.hatchStatus = string.format("Đang farm Bãi %d -> Chờ mua Egg Bãi %d", activeZone, activeZone)
+        return
+    end
 
     state.currentEggName = targetEgg.eggName or "Cocoa Cabin Egg"
+
+    -- Đảm bảo nhân vật ở tại phạm vi mở trứng (trong vòng 30 studs) NGAY TỪ ĐẦU
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and targetEgg.pos and (hrp.Position - targetEgg.pos).Magnitude > 30 then
+        pcall(function()
+            local safePos = targetEgg.pos + Vector3.new(0, 2.5, 6)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            char:PivotTo(CFrame.new(safePos, targetEgg.pos))
+            hrp.CFrame = CFrame.new(safePos, targetEgg.pos)
+        end)
+    end
+
+    local eggCost = EGG_UNIT_COSTS[targetEgg.zoneIndex or 1] or 200
+    if coins < eggCost then return end
 
     -- =====================================================================
     -- CƠ CHẾ CHU KỲ: MỞ EGG 3 LẦN -> CHECK NÚT RẺ NHẤT & NGƯNG MỞ EGG ĐỂ MUA
@@ -390,18 +410,7 @@ function EggHatch.hatchBestEggTick(state)
         end
     end
 
-    -- Đảm bảo nhân vật ở tại phạm vi mở trứng (trong vòng 40 studs)
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if hrp and targetEgg.pos and (hrp.Position - targetEgg.pos).Magnitude > 40 then
-        pcall(function()
-            local safePos = targetEgg.pos + Vector3.new(0, 2.5, 6)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            char:PivotTo(CFrame.new(safePos, targetEgg.pos))
-            hrp.CFrame = CFrame.new(safePos, targetEgg.pos)
-        end)
-    end
+
 
     -- Tính toán số lượng trứng tối đa tài khoản có thể mở mỗi lần
     initEggLibs()
