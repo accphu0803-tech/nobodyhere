@@ -420,7 +420,7 @@ function DashboardGui.create(config)
         qName.TextSize = 11
         qName.TextColor3 = Color3.fromRGB(224, 231, 255)
         qName.Position = UDim2.new(0, isTycoon and 75 or 48, 0, 2)
-        qName.Size = UDim2.new(1, isTycoon and -185 or -160, 0, 16)
+        qName.Size = UDim2.new(0, isTycoon and 130 or 180, 0, 16)
         qName.TextXAlignment = Enum.TextXAlignment.Left
         qName.TextTruncate = Enum.TextTruncate.AtEnd
         qName.BackgroundTransparency = 1
@@ -433,7 +433,7 @@ function DashboardGui.create(config)
         qProgText.TextColor3 = Color3.fromRGB(56, 189, 248)
         qProgText.AnchorPoint = Vector2.new(1, 0)
         qProgText.Position = UDim2.new(1, -8, 0, 2)
-        qProgText.Size = UDim2.new(0, 110, 0, 16)
+        qProgText.Size = UDim2.new(0, isTycoon and 260 or 110, 0, 16)
         qProgText.TextXAlignment = Enum.TextXAlignment.Right
         qProgText.BackgroundTransparency = 1
         qProgText.ZIndex = 5

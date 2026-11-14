@@ -298,7 +298,7 @@ task.spawn(function()
                 ui.ZoneLabel.Text = string.format("Pumpkin Tycoon • %s • Xây: %d/%d (%.0f%%) • %d hatched", areaName, prog.ownedButtons, prog.totalButtons, prog.percent * 100, state.totalEggsHatched or 0)
             end
             if ui.CombineLabel then
-                ui.CombineLabel.Text = string.format("🎃 Big Pumpkin: %s • AutoFarm: %s • Move: %s", prog.activeBigPumpkins > 0 and ("CÓ (Bậc " .. (prog.activeBigPumpkinRung or 1) .. ")") or "Không", state.autoFarmActive and "BẬT" or "TẮT", Config.MovementMode or "Rage")
+                ui.CombineLabel.Text = string.format("🎃 AutoFarm: %s • Move: %s • Máy Upg: %s (%d/%d Cấp)", state.autoFarmActive and "BẬT" or "TẮT", Config.MovementMode or "Rage", mach.hasMachine and "ĐÃ MỞ" or "CHƯA", mach.totalTiers or 0, mach.maxTiers or 74)
             end
             if ui.CoinsLabel then
                 ui.CoinsLabel.Text = string.format("Patch Coins: %s (+%s) • Pumpkin Tokens: %s", Network.shorten(coins), Network.shorten(deltaCoins), Network.shorten(tokens))
@@ -340,19 +340,38 @@ task.spawn(function()
                     r2.BarFill.BackgroundColor3 = Color3.fromRGB(251, 146, 60)
                 end
 
-                -- Hàng 3: [⚡ Nâng Cấp] Upgrade Machine (upgLevel / upgMaxLevel + số Pumpkin Tokens)
+                -- Hàng 3: [⚡ Nâng Cấp] Upgrade Machine
                 local r3 = ui.QuestRows[3]
                 if r3 then
                     r3.Row.Visible = true
                     r3.Stars.Text = "[⚡ Nâng Cấp]"
                     r3.Stars.TextColor3 = Color3.fromRGB(168, 85, 247)
                     r3.Name.Text = "Upgrade Machine"
-                    local upgLevel = mach.totalTiers or 0
-                    local upgMaxLevel = mach.maxTiers or 100
-                    r3.ProgText.Text = string.format("%d / %d Cấp • Tokens: %s", upgLevel, upgMaxLevel, Network.shorten(tokens))
-                    r3.ProgText.TextColor3 = Color3.fromRGB(168, 85, 247)
-                    r3.BarFill.Size = UDim2.new(math.clamp(upgLevel / upgMaxLevel, 0, 1), 0, 1, 0)
-                    r3.BarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
+                    
+                    if not mach.hasMachine then
+                        r3.ProgText.Text = "Chưa mở máy • Chờ mua nút UpgradeMachine"
+                        r3.ProgText.TextColor3 = Color3.fromRGB(148, 163, 184)
+                        r3.BarFill.Size = UDim2.new(0, 0, 1, 0)
+                    elseif mach.totalTiers >= (mach.maxTiers or 74) then
+                        r3.ProgText.Text = string.format("MAX TOÀN BỘ (%d/%d Cấp) • Đã Tối Đa!", mach.totalTiers, mach.maxTiers or 74)
+                        r3.ProgText.TextColor3 = Color3.fromRGB(52, 211, 153)
+                        r3.BarFill.Size = UDim2.new(1, 0, 1, 0)
+                        r3.BarFill.BackgroundColor3 = Color3.fromRGB(52, 211, 153)
+                    else
+                        local nxt = mach.nextUpgrade
+                        local nextText = ""
+                        if nxt then
+                            if tokens >= nxt.cost then
+                                nextText = string.format(" • Tiếp: %s Lv%d (%s 🎟️ - ĐỦ)", nxt.name, nxt.nextTier, Network.shorten(nxt.cost))
+                            else
+                                nextText = string.format(" • Tiếp: %s Lv%d (%s/%s 🎟️)", nxt.name, nxt.nextTier, Network.shorten(tokens), Network.shorten(nxt.cost))
+                            end
+                        end
+                        r3.ProgText.Text = string.format("%d/%d Cấp (%.0f%%)%s", mach.totalTiers, mach.maxTiers or 74, (mach.percent or 0) * 100, nextText)
+                        r3.ProgText.TextColor3 = Color3.fromRGB(168, 85, 247)
+                        r3.BarFill.Size = UDim2.new(math.clamp(mach.percent or 0, 0, 1), 0, 1, 0)
+                        r3.BarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
+                    end
                 end
 
                 -- Hàng 4: [☕ Cocoa] Hot Cocoa Boosts & Ép Pet Gold/Rainbow

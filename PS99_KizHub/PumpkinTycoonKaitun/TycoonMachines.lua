@@ -432,29 +432,117 @@ function TycoonMachines.runAllMachinesTick(state)
     runFlannelGifts(plot)
 end
 
+local UPGRADE_TRACK_SPECS = {
+    { id = "SpawnLuck", name = "Spawn Luck", max = 10 },
+    { id = "PumpkinCoins", name = "Coins", max = 10 },
+    { id = "PumpkinDamage", name = "Damage", max = 10 },
+    { id = "RespawnSpeed", name = "Spawns", max = 8 },
+    { id = "StockSlots", name = "Stock", max = 5 },
+    { id = "ChaseOdds", name = "Chase", max = 8 },
+    { id = "EggLuck", name = "Egg Luck", max = 10 },
+    { id = "MerchantLuck", name = "Merchant", max = 8 },
+    { id = "AutoBreakRules", name = "AutoBreak", max = 5 },
+}
+
 function TycoonMachines.getMachineSummary()
+    initMachineLibs()
     local plot = getPlot()
-    if not plot then
-        return {
-            tokens = 0,
-            avgUpgradeLevel = 0,
-            activeCocoaMin = 0,
-            stockCount = 0,
-        }
+
+    local buttonsState = {}
+    pcall(function()
+        if IslandCmds and type(IslandCmds.Get) == "function" then
+            buttonsState = IslandCmds.Get(nil, "Buttons") or {}
+        end
+    end)
+    if not buttonsState or not next(buttonsState) then
+        pcall(function()
+            if plot and type(plot.Save) == "function" then
+                buttonsState = plot:Save("Buttons") or {}
+            end
+        end)
+    end
+
+    local hasMachine = false
+    if PTButtons and type(PTButtons.Owned) == "function" then
+        hasMachine = PTButtons.Owned(buttonsState, "UpgradeMachine")
+    else
+        hasMachine = (buttonsState["UpgradeMachine"] == true or buttonsState["UpgradeMachine"] == 1)
+    end
+    if not hasMachine and UpgradesCmds and type(UpgradesCmds.Unlocked) == "function" then
+        pcall(function()
+            hasMachine = (UpgradesCmds.Unlocked() == true)
+        end)
     end
 
     local tokens = Network.currency(K.TOKENS) or 0
-    local totalTiers = 0
-    local count = 0
-
-    pcall(function()
-        if UpgradesCmds and type(UpgradesCmds.Tier) == "function" then
-            for _, t in ipairs(K.UPGRADE_TRACKS) do
-                totalTiers = totalTiers + (UpgradesCmds.Tier(t) or 0)
-                count = count + 1
+    if tokens <= 0 then
+        local s = Network.getSave and Network.getSave()
+        if s then
+            local cur = (s.Inventory and s.Inventory.Currency) or s.Currencies or s.Currency
+            if type(cur) == "table" then
+                for _, v in pairs(cur) do
+                    if type(v) == "table" and (v.id == K.TOKENS or v._id == K.TOKENS) then
+                        tokens = tonumber(v._am or v.Amount) or 0
+                        break
+                    end
+                end
             end
         end
-    end)
+    end
+
+    local totalTiers = 0
+    local maxTiers = 74
+    local trackTiers = {}
+    local nextUpgrade = nil
+
+    local order = (Config and Config.UpgradeOrder) or {}
+    local checkedTracks = {}
+    local orderedSpecs = {}
+
+    for _, trId in ipairs(order) do
+        for _, spec in ipairs(UPGRADE_TRACK_SPECS) do
+            if spec.id == trId then
+                table.insert(orderedSpecs, spec)
+                checkedTracks[spec.id] = true
+                break
+            end
+        end
+    end
+    for _, spec in ipairs(UPGRADE_TRACK_SPECS) do
+        if not checkedTracks[spec.id] then
+            table.insert(orderedSpecs, spec)
+        end
+    end
+
+    for _, spec in ipairs(orderedSpecs) do
+        local curTier = 0
+        pcall(function()
+            if UpgradesCmds and type(UpgradesCmds.Tier) == "function" then
+                curTier = tonumber(UpgradesCmds.Tier(spec.id)) or 0
+            end
+        end)
+        totalTiers = totalTiers + curTier
+        trackTiers[spec.id] = curTier
+
+        if curTier < spec.max and not nextUpgrade then
+            local cost = 999999999
+            pcall(function()
+                if UpgradesTypes and type(UpgradesTypes.Cost) == "function" then
+                    cost = UpgradesTypes.Cost(spec.id, curTier + 1) or 999999999
+                elseif UpgradesCmds and type(UpgradesCmds.Cost) == "function" then
+                    cost = UpgradesCmds.Cost(spec.id, curTier + 1) or 999999999
+                end
+            end)
+            nextUpgrade = {
+                id = spec.id,
+                name = spec.name,
+                curTier = curTier,
+                nextTier = curTier + 1,
+                maxTier = spec.max,
+                cost = cost,
+            }
+        end
+    end
 
     local activeCocoa = 0
     pcall(function()
@@ -470,16 +558,45 @@ function TycoonMachines.getMachineSummary()
 
     local stockCount = 0
     pcall(function()
-        local s = plot:Save("Stock")
+        local s = plot and plot:Save("Stock")
         if type(s) == "table" then stockCount = #s end
     end)
 
+    local flannelGiftCount = 0
+    pcall(function()
+        local s = Network.getSave and Network.getSave()
+        if s and s.Inventory and s.Inventory.Lootbox then
+            for _, box in pairs(s.Inventory.Lootbox) do
+                if type(box) == "table" and (box.id == "Flannel Gift" or box._id == "Flannel Gift") then
+                    flannelGiftCount = flannelGiftCount + (tonumber(box._am or box.Amount) or 1)
+                end
+            end
+        end
+    end)
+
+    local merchantStatus = "Rảnh"
+    pcall(function()
+        local hasMerchant = (buttonsState["Merchant"] == true)
+        if not hasMerchant then
+            merchantStatus = "Chưa mở"
+        else
+            merchantStatus = "Tự động mua"
+        end
+    end)
+
     return {
+        hasMachine = hasMachine,
         tokens = tokens,
-        avgUpgradeLevel = count > 0 and math.floor(totalTiers / count) or 0,
         totalTiers = totalTiers,
+        maxTiers = maxTiers,
+        percent = maxTiers > 0 and (totalTiers / maxTiers) or 0,
+        trackTiers = trackTiers,
+        nextUpgrade = nextUpgrade,
         activeCocoaMin = activeCocoa,
         stockCount = stockCount,
+        stockMax = 15,
+        flannelGiftCount = flannelGiftCount,
+        merchantStatus = merchantStatus,
     }
 end
 
