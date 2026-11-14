@@ -187,23 +187,50 @@ end
 -- 3. QUẢN LÝ QUY TẮC AUTOBREAK, PEDESTAL VÀ AUTO FARM SỰ KIỆN
 -- =========================================================================
 
-function TycoonFarm.getSweetPos()
+function TycoonFarm.getPlotCFrame()
     local plot = TycoonFarm.getPlot()
-    local plotModel = TycoonFarm.getPlotModel()
-    if plot then
-        local okCF, plotCF = pcall(function() return plot:GetCFrame() end)
-        if okCF and plotCF then
-            return plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
+    if plot and type(plot.GetCFrame) == "function" then
+        local ok, cf = pcall(plot.GetCFrame, plot)
+        if ok and typeof(cf) == "CFrame" then
+            return cf
         end
     end
+    local plotModel = TycoonFarm.getPlotModel()
+    if plotModel and typeof(plotModel) == "Instance" then
+        local okP, pcf = pcall(function() return plotModel:GetPivot() end)
+        if okP and typeof(pcf) == "CFrame" then
+            return pcf
+        end
+        if plotModel.PrimaryPart then
+            return plotModel.PrimaryPart.CFrame
+        end
+    end
+    return nil
+end
+
+function TycoonFarm.getSweetPos()
+    local plotCF = TycoonFarm.getPlotCFrame()
+    if plotCF then
+        return plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
+    end
+
+    local plotModel = TycoonFarm.getPlotModel()
     if plotModel then
-        local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg")
+        if PTButtons and type(PTButtons.ZoneSlab) == "function" then
+            local okSlab, slab = pcall(PTButtons.ZoneSlab, plotModel, 1)
+            if okSlab and slab and slab:IsA("BasePart") then
+                return slab.Position + Vector3.new(0, 3, 0)
+            end
+        end
+
+        local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg") or plotModel:GetAttribute("CocoaCabinEgg")
         if typeof(eggAttr) == "CFrame" then
             return eggAttr.Position + Vector3.new(0, 2, 12)
         elseif typeof(eggAttr) == "Vector3" then
             return eggAttr + Vector3.new(0, 2, 12)
         end
     end
+
     return nil
 end
 
@@ -445,9 +472,9 @@ function TycoonFarm.farmBestPatchTick(state)
     -- Kích hoạt Auto Farm miễn phí của event
     TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)
 
-    -- Nếu không có excursion (không đi phá bí ngô ở bệ xa) và cách sweetPos > 14 studs -> Di chuyển về sweetPos
+    -- Nếu không có excursion (không đi phá bí ngô ở bệ xa) và cách sweetPos > 8 studs -> Di chuyển về sweetPos
     local char, hrp = getCharacterParts()
-    if state and state.excursion == nil and hrp and (hrp.Position - sweetPos).Magnitude > 14 then
+    if state and state.excursion == nil and hrp and (hrp.Position - sweetPos).Magnitude > 8 then
         TycoonFarm.moveTo(sweetPos)
     end
 

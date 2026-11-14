@@ -123,17 +123,18 @@ function EggHatch.getBestUnlockedEgg()
         isUnlocked = (buttonsState["CocoaCabin_Egg"] == true or buttonsState["CocoaCabin_Egg"] == 1)
     end
 
-    if not isUnlocked then return nil end
-
-    local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg")
+    -- Tìm vị trí egg từ thuộc tính hoặc ước lượng từ CFrame của đảo
     local eggPos = nil
+    local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg") or plotModel:GetAttribute("CocoaCabinEgg")
     if typeof(eggAttr) == "CFrame" then
         eggPos = eggAttr.Position
     elseif typeof(eggAttr) == "Vector3" then
         eggPos = eggAttr
     end
 
-    if not eggPos then return nil end
+    local plotPivot = plotModel:GetPivot()
+    local estimatedEggPos = plotPivot:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00)) - Vector3.new(0, 2, 12)
+    local targetPos = eggPos or estimatedEggPos
 
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
@@ -141,25 +142,52 @@ function EggHatch.getBestUnlockedEgg()
     local eggUid = nil
 
     if customEggsFolder then
-        local bestDist = 35
+        local bestDist = 45
         for _, egg in ipairs(customEggsFolder:GetChildren()) do
-            local dist = (egg:GetPivot().Position - eggPos).Magnitude
+            local dist = (egg:GetPivot().Position - targetPos).Magnitude
             if dist <= bestDist then
                 bestDist = dist
                 eggInstance = egg
                 eggUid = egg.Name -- 32-char UUID (e.g. "9cc0a4a2b51d4c64a17705d461d9c26c")
+                eggPos = egg:GetPivot().Position
+            end
+        end
+
+        -- Nếu chưa tìm thấy trong phạm vi 45 studs, quét toàn bộ CustomEggs trên đảo (< 250 studs)
+        if not eggUid then
+            local bestPlotDist = 250
+            for _, egg in ipairs(customEggsFolder:GetChildren()) do
+                local dist = (egg:GetPivot().Position - plotPivot.Position).Magnitude
+                if dist <= bestPlotDist then
+                    bestPlotDist = dist
+                    eggInstance = egg
+                    eggUid = egg.Name
+                    eggPos = egg:GetPivot().Position
+                end
             end
         end
     end
 
-    if eggUid then
+    -- Nếu tìm thấy model CustomEgg trên đảo của mình -> Trứng chắc chắn đã mở khóa!
+    if eggUid and eggPos then
         return {
             eggName = "Cocoa Cabin Egg",
             eggBtnId = "CocoaCabin_Egg",
             displayName = "Cocoa Cabin",
             eggInstance = eggInstance,
             eggUid = eggUid,
-            pos = eggPos or (eggInstance and eggInstance:GetPivot().Position),
+            pos = eggPos,
+        }
+    end
+
+    if isUnlocked and targetPos then
+        return {
+            eggName = "Cocoa Cabin Egg",
+            eggBtnId = "CocoaCabin_Egg",
+            displayName = "Cocoa Cabin",
+            eggInstance = nil,
+            eggUid = nil,
+            pos = targetPos,
         }
     end
 
@@ -179,17 +207,21 @@ function EggHatch.hatchBestEggTick(state)
     if now - lastHatchAttempt < (Config.HatchDelay or 1.0) then return end
     lastHatchAttempt = now
 
-    local coins = Network.currency(K.CURRENCY) or 0
+    local coins = Network.currency(K.CURRENCY)
+    if coins == nil then
+        local s = Network.getSave()
+        coins = (s and s.Currency and s.Currency[K.CURRENCY]) or (s and s[K.CURRENCY]) or 0
+    end
     if coins <= 0 then return end
 
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
 
-    -- Đứng tại sweet spot trên đảo (trong phạm vi 40 studs của eggPos)
+    -- Đứng tại sweet spot trên đảo (trong phạm vi 45 studs của eggPos)
     if targetEgg.pos then
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 40 then
+        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 45 then
             return
         end
     end
