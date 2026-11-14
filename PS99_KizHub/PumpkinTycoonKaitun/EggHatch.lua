@@ -131,6 +131,7 @@ local EGG_AREAS = {
         name = "Egg 3 (Hayride Hill)",
         eggName = "Hayride Hill Egg",
         displayName = "Hayride Hill",
+        offset = Vector3.new(-200.28, 0.08, -52.88),
         btnId = "HayrideHill_Egg",
         attrName = "HayrideHill_Egg",
         unitCost = 4000,

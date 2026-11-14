@@ -173,6 +173,7 @@ local FARM_AREAS = {
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
+        offset = Vector3.new(-200.28, 0.08, -52.88),
         eggAttr = "HayrideHill_Egg",
         eggBtn = "HayrideHill_Egg",
     },
