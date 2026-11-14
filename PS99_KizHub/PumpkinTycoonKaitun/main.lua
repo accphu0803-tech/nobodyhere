@@ -156,7 +156,12 @@ local sharedDeps = {
     end,
     petEuids = TycoonFarm.petEuids,
     DashboardGui = DashboardGui,
+    TycoonFarm = TycoonFarm,
+    EggHatch = EggHatch,
 }
+
+Modules.TycoonFarm = TycoonFarm
+Modules.EggHatch = EggHatch
 
 TycoonFarm.init(sharedDeps)
 EggHatch.init(sharedDeps)
@@ -289,7 +294,7 @@ task.spawn(function()
                 ui.MailLabel.Text = string.format("Hatched: %d • Flannel Gifts: %d • Merchant: %s • Mail: %s", state.totalEggsHatched or 0, mach.flannelGiftCount or 0, mach.merchantStatus or "Rảnh", state.mailStatus or "Rảnh")
             end
             if ui.DetailBox then
-                ui.DetailBox.Text = "Doing: " .. tostring(state.excursion or "Đứng bãi farm & mở trứng liên tục...")
+                ui.DetailBox.Text = "Doing: " .. tostring(state.excursion or state.hatchStatus or "Đứng bãi farm & mở trứng...")
             end
 
             -- Cập nhật 4 Hàng Tiến Độ (QuestRows)

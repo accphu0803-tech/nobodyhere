@@ -592,6 +592,36 @@ function TycoonFarm.getNextTargetButton(priceMult)
     return cheapestBtn, minPrice, false
 end
 
+-- Quét tìm nút có giá rẻ nhất trong toàn bộ danh sách các nút hiện có thể mua
+function TycoonFarm.getCheapestAvailableButton(priceMult)
+    local plot = TycoonFarm.getPlot()
+    if not plot then return nil end
+
+    initGameLibs()
+    local buttonsState = plot:Save("Buttons") or {}
+    if not (PTButtons and type(PTButtons.Available) == "function" and type(PTButtons.Price) == "function") then
+        return nil
+    end
+
+    priceMult = priceMult or (ButtonsCmds and type(ButtonsCmds.PriceMult) == "function" and ButtonsCmds.PriceMult()) or 1
+    local avail = PTButtons.Available(buttonsState, 15, false, priceMult)
+    if not (type(avail) == "table" and #avail > 0) then
+        return nil
+    end
+
+    local cheapestBtn = avail[1]
+    local minPrice = PTButtons.Price(cheapestBtn, priceMult) or math.huge
+    for i = 2, #avail do
+        local p = PTButtons.Price(avail[i], priceMult) or math.huge
+        if p < minPrice then
+            cheapestBtn = avail[i]
+            minPrice = p
+        end
+    end
+
+    return cheapestBtn, minPrice
+end
+
 function TycoonFarm.checkAndBuyButtons(state)
     if not Config.AutoBuyButtons then return end
     local plot = TycoonFarm.getPlot()
@@ -623,6 +653,9 @@ function TycoonFarm.checkAndBuyButtons(state)
         end)
         if okB and resB == true then
             print(string.format("[KizHub Tycoon] 👑 ĐÃ MUA THÀNH CÔNG NÚT MỐC: %s (Giá: %s Coins)", tostring(targetBtn.Id), Network.shorten(targetPrice)))
+            if Modules and Modules.EggHatch and type(Modules.EggHatch.onButtonBought) == "function" then
+                Modules.EggHatch.onButtonBought(targetBtn.Id)
+            end
             task.wait(0.3)
             return
         else
@@ -655,7 +688,15 @@ function TycoonFarm.checkAndBuyButtons(state)
                     char:PivotTo(CFrame.new(padPos + Vector3.new(0, 3, 0)))
                 end)
                 task.wait(0.2)
-                pcall(function() plot:Invoke(K.VERBS.BuyButton, targetBtn.Id) end)
+                pcall(function()
+                    local buyOk, buyRes = plot:Invoke(K.VERBS.BuyButton, targetBtn.Id)
+                    if buyOk and buyRes == true then
+                        print(string.format("[KizHub Tycoon] 👑 ĐÃ MUA THÀNH CÔNG NÚT MỐC QUA BỆ PAD: %s", tostring(targetBtn.Id)))
+                        if Modules and Modules.EggHatch and type(Modules.EggHatch.onButtonBought) == "function" then
+                            Modules.EggHatch.onButtonBought(targetBtn.Id)
+                        end
+                    end
+                end)
                 task.wait(0.2)
                 return
             end
@@ -674,6 +715,9 @@ function TycoonFarm.checkAndBuyButtons(state)
                     end)
                     if okB and resB == true then
                         print(string.format("[KizHub Tycoon] ✔ Đã mua nút: %s (Giá: %s Coins)", tostring(btn.Id), Network.shorten(price)))
+                        if Modules and Modules.EggHatch and type(Modules.EggHatch.onButtonBought) == "function" then
+                            Modules.EggHatch.onButtonBought(btn.Id)
+                        end
                         task.wait(0.2)
                         break
                     else

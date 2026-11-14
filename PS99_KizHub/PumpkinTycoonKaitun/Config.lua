@@ -89,6 +89,7 @@ local Config = {
 
     -- Cân đối ngân sách Tycoon thông minh (Mua Button vs Mở Egg)
     Economy = {
+        HatchCyclesBeforeButtonCheck = 3, -- Cứ mở egg 3 lần sẽ check nút rẻ nhất tiếp theo và ngưng mở egg cho tới khi mua xong nút
         PrioritizeEggButtons = true,    -- Luôn gom 100% tiền mua ngay nút Egg & Zone khi xuất hiện
         ReserveRatioForExpensive = 0.6, -- Với nút giá cao: Giữ 60% tiền làm quỹ tích lũy, dùng thặng dư hatch
     },
