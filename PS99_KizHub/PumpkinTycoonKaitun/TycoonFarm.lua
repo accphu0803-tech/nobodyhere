@@ -80,19 +80,38 @@ function TycoonFarm.getPlot()
         local ok, plot = pcall(IslandCmds.Plot)
         if ok and plot then return plot end
     end
+    -- Fallback: tìm trong workspace.__THINGS.Plots theo UserId hoặc Player
+    local things = workspace:FindFirstChild("__THINGS")
+    local plots = things and things:FindFirstChild("Plots")
+    if plots and LocalPlayer then
+        for _, p in ipairs(plots:GetChildren()) do
+            local owner = p:GetAttribute("Owner") or p:GetAttribute("UserId") or p:GetAttribute("Player")
+            if owner == LocalPlayer.UserId or owner == LocalPlayer.Name or tostring(owner) == tostring(LocalPlayer.UserId) then
+                return p
+            end
+        end
+    end
     return nil
 end
 
 function TycoonFarm.getPlotModel()
     local plot = TycoonFarm.getPlot()
     if not plot then return nil end
+    if typeof(plot) == "Instance" and plot:IsA("Model") then
+        return plot
+    end
     local ok, model = pcall(function() return plot:GetModel() end)
     if ok and model then return model end
 
-    local plotId = tostring(plot:GetId())
-    local things = workspace:FindFirstChild("__THINGS")
-    local plots = things and things:FindFirstChild("Plots")
-    return plots and plots:FindFirstChild(plotId)
+    if type(plot.GetId) == "function" then
+        local plotId = tostring(plot:GetId())
+        local things = workspace:FindFirstChild("__THINGS")
+        local plots = things and things:FindFirstChild("Plots")
+        if plots and plots:FindFirstChild(plotId) then
+            return plots:FindFirstChild(plotId)
+        end
+    end
+    return nil
 end
 
 -- =========================================================================
@@ -113,6 +132,9 @@ function TycoonFarm.moveTo(targetPosOrCF)
 
     local char, hrp, hum = getCharacterParts()
     if not hrp or not hum then return end
+
+    if hum.Sit then hum.Sit = false end
+    if hum.PlatformStand then hum.PlatformStand = false end
 
     local cf = typeof(targetPosOrCF) == "CFrame" and targetPosOrCF or CFrame.new(targetPos + Vector3.new(0, 2.5, 0))
 
@@ -179,7 +201,7 @@ local FARM_AREAS = {
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
-        offset = Vector3.new(-200.28, 0.08, -52.88),
+        offset = Vector3.new(-199.02, 0.08, -50.96),
         pathBtn = "Path_3",
         zoneBtn = "HayrideHill_Zone",
         eggAttr = "HayrideHill_Egg",
@@ -209,15 +231,43 @@ local FARM_AREAS = {
 }
 
 function TycoonFarm.getActiveAreaIndex()
+    if Config and Config.ForceZone then
+        return tonumber(Config.ForceZone) or 1
+    end
+
     local plot = TycoonFarm.getPlot()
     if not plot then return 1 end
 
     initGameLibs()
-    local buttonsState = plot:Save("Buttons") or {}
+
+    -- 1. Lấy trạng thái buttons từ IslandCmds.Get(nil, "Buttons") trước, fallback plot:Save("Buttons")
+    local buttonsState = {}
+    pcall(function()
+        if IslandCmds and type(IslandCmds.Get) == "function" then
+            buttonsState = IslandCmds.Get(nil, "Buttons") or {}
+        end
+    end)
+    if not buttonsState or not next(buttonsState) then
+        pcall(function()
+            if plot and type(plot.Save) == "function" then
+                buttonsState = plot:Save("Buttons") or {}
+            end
+        end)
+    end
+    if not buttonsState or not next(buttonsState) then
+        pcall(function()
+            local s = Network.getSave and Network.getSave()
+            if s and s.PumpkinTycoon and type(s.PumpkinTycoon.Buttons) == "table" then
+                buttonsState = s.PumpkinTycoon.Buttons
+            end
+        end)
+    end
+
     local plotPivot = TycoonFarm.getPlotPivot()
     local plotModel = TycoonFarm.getPlotModel()
     local things = workspace:FindFirstChild("__THINGS")
     local customEggs = things and things:FindFirstChild("CustomEggs")
+    local sectionsFolder = plotModel and plotModel:FindFirstChild("Sections")
 
     local function isButtonOwned(btnId)
         if not btnId then return false end
@@ -231,12 +281,24 @@ function TycoonFarm.getActiveAreaIndex()
     -- Quét từ bãi cao nhất (Bãi 5) xuống bãi thấp nhất (Bãi 1)
     for zoneIdx = 5, 1, -1 do
         local area = FARM_AREAS[zoneIdx]
-        -- 1. Kiểm tra đã sở hữu nút mở Egg hoặc nút Zone hoặc nút Path dẫn đến bãi đó
+
+        -- A. Kiểm tra đã sở hữu nút mở Egg hoặc nút Zone hoặc nút Path dẫn đến bãi đó
         if isButtonOwned(area.eggBtn) or isButtonOwned(area.zoneBtn) or isButtonOwned(area.pathBtn) then
             return zoneIdx
         end
 
-        -- 2. Kiểm tra nếu có CustomEgg của bãi đó đã xuất hiện trên map
+        -- B. Kiểm tra thư mục Plot.Sections (khi mua zone, khu vực sẽ xuất hiện trong Sections)
+        if sectionsFolder then
+            for _, sec in ipairs(sectionsFolder:GetChildren()) do
+                local zn = sec:GetAttribute("ZoneNumber") or tonumber(sec.Name:match("^(%d+)"))
+                local ts = sec:GetAttribute("TycoonSection") or ""
+                if zn == zoneIdx or sec.Name:find(area.displayName) or (area.displayName and ts:lower():find(area.displayName:gsub("%s+", ""):lower())) then
+                    return zoneIdx
+                end
+            end
+        end
+
+        -- C. Kiểm tra nếu có CustomEgg của bãi đó đã xuất hiện trên map
         local eggPos = nil
         if plotModel then
             local eggAttr = plotModel:GetAttribute(area.eggAttr)
@@ -252,7 +314,21 @@ function TycoonFarm.getActiveAreaIndex()
 
         if eggPos and customEggs then
             for _, egg in ipairs(customEggs:GetChildren()) do
-                if (egg:GetPivot().Position - eggPos).Magnitude < 45 then
+                if (egg:GetPivot().Position - eggPos).Magnitude < 65 then
+                    return zoneIdx
+                end
+            end
+        end
+    end
+
+    -- D. Fallback nếu nhân vật đang đứng gần offset của bãi nào (trong phạm vi 100 studs)
+    local char, hrp = getCharacterParts()
+    if hrp and plotPivot then
+        for zoneIdx = 5, 2, -1 do
+            local area = FARM_AREAS[zoneIdx]
+            if area.offset then
+                local worldOffset = plotPivot:PointToWorldSpace(area.offset)
+                if (hrp.Position - worldOffset).Magnitude <= 100 then
                     return zoneIdx
                 end
             end
@@ -466,6 +542,9 @@ function TycoonFarm.petEuids()
 end
 
 function TycoonFarm.breakBigPumpkinTick(state)
+    if state and state.excursion and state.excursion:find("Bí Ngô") then
+        state.excursion = nil
+    end
     if not Config.BreakBigPumpkins then return false end
     local bp = TycoonFarm.findActiveBigPumpkin()
     if not bp then

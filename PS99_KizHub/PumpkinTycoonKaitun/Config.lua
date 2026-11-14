@@ -19,7 +19,7 @@ local Config = {
 
     -- Farm đảo & Quái Bí Ngô
     AutoFarmTycoon = true,
-    BreakBigPumpkins = true,
+    BreakBigPumpkins = false,
     BigPumpkinMaxDistance = 400,
 
     -- Mua nút Tycoon & Nhận thưởng đảo

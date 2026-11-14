@@ -378,7 +378,7 @@ end)
 -- 5. CÁC TIẾN TRÌNH VẬN HÀNH ĐỒNG THỜI (CONCURRENT WORKERS)
 -- =========================================================================
 
--- LUỒNG 1: Farm bãi patch cao nhất + Ưu tiên diệt Bí Ngô Khổng Lồ + Mở trứng Custom
+-- LUỒNG 1: Farm bãi patch cao nhất + Mở trứng Custom (để cơ chế game tự điều phối pet đánh quái)
 task.spawn(function()
     while state.alive do
         pcall(function()
@@ -387,13 +387,10 @@ task.spawn(function()
                 return
             end
 
-            -- 1. Ưu tiên cao nhất: Đánh Bí Ngô Khổng Lồ trên bệ bằng Pet & Remote
-            TycoonFarm.breakBigPumpkinTick(state)
-
-            -- 2. Luôn duy trì farm bãi Patch tốt nhất (sweet spot)
+            -- 1. Luôn duy trì farm bãi Patch tốt nhất (sweet spot)
             TycoonFarm.farmBestPatchTick(state)
 
-            -- 3. Mở trứng Custom cao nhất từ xa (tại sweet spot)
+            -- 2. Mở trứng Custom cao nhất từ xa (tại sweet spot)
             EggHatch.hatchBestEggTick(state)
         end)
         task.wait(0.1)
