@@ -10,7 +10,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
-local GITHUB_REPO_BASE = "https://raw.githubusercontent.com/lamhoc/speed_jump_autoclick_tele/refs/heads/main/PS99_KizHub/"
+local GITHUB_REPO_BASE = (type(getgenv) == "function" and getgenv().KizHubRepoBase) or "https://raw.githubusercontent.com/accphu0803-tech/nobodyhere/refs/heads/main/PS99_KizHub/"
+local GITHUB_FALLBACK_BASE = "https://raw.githubusercontent.com/lamhoc/speed_jump_autoclick_tele/refs/heads/main/PS99_KizHub/"
 
 local function readFileSafe(path)
     if type(readfile) == "function" then
@@ -36,15 +37,19 @@ local function import(relativePath)
         end
     end
 
-    local url = GITHUB_REPO_BASE .. relativePath
-    local cacheBustUrl = url .. "?t=" .. tostring(os.time())
+    local primaryUrl = GITHUB_REPO_BASE .. relativePath
+    local cacheBustUrl = primaryUrl .. "?t=" .. tostring(os.time())
     local okG, webContent = pcall(function() return game:HttpGet(cacheBustUrl) end)
     if not okG or not webContent or #webContent == 0 then
-        okG, webContent = pcall(function() return game:HttpGet(url) end)
+        okG, webContent = pcall(function() return game:HttpGet(primaryUrl) end)
+    end
+    if not okG or not webContent or #webContent == 0 then
+        local fallbackUrl = GITHUB_FALLBACK_BASE .. relativePath
+        okG, webContent = pcall(function() return game:HttpGet(fallbackUrl) end)
     end
     if okG and webContent and #webContent > 0 then
         local fn, err = loadstring(webContent, "=" .. relativePath)
-        if fn then return fn() else error("[KizHub Import] Lỗi nạp online " .. url .. ": " .. tostring(err)) end
+        if fn then return fn() else error("[KizHub Import] Lỗi nạp online " .. primaryUrl .. ": " .. tostring(err)) end
     end
 
     error("[KizHub Import] Không tìm thấy file: " .. relativePath)
