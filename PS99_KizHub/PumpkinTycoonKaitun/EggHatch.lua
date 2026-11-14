@@ -22,6 +22,7 @@ local instanceModelFn = nil
 local EggCmds = nil
 local CustomEggsCmds = nil
 local PTButtons = nil
+local TycoonFarm = nil
 
 local function safeRequire(pathTbl)
     local cur = ReplicatedStorage
@@ -53,6 +54,7 @@ function EggHatch.init(deps)
     Webhook = deps.Webhook
     inEventFn = deps.inEvent
     instanceModelFn = deps.instanceModel
+    TycoonFarm = deps.TycoonFarm
     initEggLibs()
 end
 
@@ -238,8 +240,16 @@ function EggHatch.getBestUnlockedEgg()
 end
 
 -- =========================================================================
--- 3. THỰC THI MỞ TRỨNG TỪ XA KHÔNG LỆCH VỊ TRÍ FARM
+-- 3. THỰC THI MỞ TRỨNG TỪ XA VÀ CÂN ĐỐI NGÂN SÁCH TYCOON THÔNG MINH
 -- =========================================================================
+
+local EGG_UNIT_COSTS = {
+    [1] = 200,
+    [2] = 1000,
+    [3] = 4000,
+    [4] = 8000,
+    [5] = 15000,
+}
 
 local lastHatchAttempt = 0
 
@@ -265,11 +275,12 @@ function EggHatch.hatchBestEggTick(state)
             end
         end
     end
-    -- Trứng Zone 1 cần tối thiểu 200 coins
-    if coins < 200 then return end
 
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
+
+    local eggCost = EGG_UNIT_COSTS[targetEgg.zoneIndex or 1] or 200
+    if coins < eggCost then return end
 
     state.currentEggName = targetEgg.eggName or "Cocoa Cabin Egg"
 
@@ -286,35 +297,92 @@ function EggHatch.hatchBestEggTick(state)
         end)
     end
 
-    -- Tính toán số lượng trứng tối đa có thể mở mỗi lần
+    -- Tính toán số lượng trứng tối đa tài khoản có thể mở mỗi lần
     initEggLibs()
-    local maxHatch = 1
+    local accountMaxHatch = 1
     pcall(function()
         if EggCmds and type(EggCmds.GetMaxHatch) == "function" then
-            maxHatch = math.clamp(tonumber(EggCmds.GetMaxHatch()) or 1, 1, 99)
+            accountMaxHatch = math.clamp(tonumber(EggCmds.GetMaxHatch()) or 1, 1, 99)
         elseif Modules and Modules.G and Modules.G.EggCmds and Network.isfn(Modules.G.EggCmds, "GetMaxHatch") then
-            maxHatch = math.clamp(tonumber(Network.gval(Modules.G.EggCmds.GetMaxHatch)) or 1, 1, 99)
+            accountMaxHatch = math.clamp(tonumber(Network.gval(Modules.G.EggCmds.GetMaxHatch)) or 1, 1, 99)
         end
     end)
+
+    -- CÂN ĐỐI NGÂN SÁCH TYCOON: MUA NÚT VS MỞ TRỨNG
+    local targetBtn, btnPrice, isMilestone = nil, 0, false
+    if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
+        targetBtn, btnPrice, isMilestone = TycoonFarm.getNextTargetButton()
+    end
+
+    local allowedHatch = accountMaxHatch
+
+    if targetBtn and btnPrice > 0 then
+        local hatchBatchCost = eggCost * accountMaxHatch
+
+        -- 1. NÚT MỐC QUAN TRỌNG (Egg hoặc Zone button):
+        -- ƯU TIÊN 100% TIỀN: Gom tiền mua nút mốc trước để nhảy vọt kinh tế!
+        if isMilestone then
+            if coins < btnPrice then
+                -- Chưa đủ tiền mua nút mốc -> Tạm dừng mở trứng để dồn tiền
+                state.hatchStatus = string.format("Dồn tiền mua %s (%s / %s)", tostring(targetBtn.Id or "Nút Mốc"), Network.shorten(coins), Network.shorten(btnPrice))
+                return
+            else
+                -- Đã đủ tiền mua nút mốc -> Mua nút trước, chỉ dùng phần tiền dư sau mua để mở trứng
+                local surplus = coins - btnPrice
+                if surplus < eggCost then
+                    state.hatchStatus = "Chờ mua nút mốc quan trọng"
+                    return
+                end
+                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+            end
+        -- 2. NÚT THƯỜNG GIÁ RẺ (<= 2 lần tiền mở 1 lượt maxHatch):
+        elseif btnPrice <= hatchBatchCost * 2 then
+            if coins < btnPrice then
+                state.hatchStatus = string.format("Tiết kiệm mua nút %s (%s)", tostring(targetBtn.Id or "Nút"), Network.shorten(btnPrice))
+                return
+            else
+                local surplus = coins - btnPrice
+                if surplus < eggCost then return end
+                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+            end
+        -- 3. NÚT THƯỜNG GIÁ CAO (Càng về sau nút càng đắt, ví dụ 500k - 20M coins):
+        -- Giữ 60% tiền làm quỹ tích lũy, dùng tối đa 40% thặng dư để hatch liên tục
+        else
+            local reserveRatio = (Config.Economy and Config.Economy.ReserveRatioForExpensive) or 0.6
+            local reserve = btnPrice * reserveRatio
+            if coins > reserve then
+                local surplus = coins - reserve
+                if surplus < eggCost then return end
+                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+            elseif coins >= hatchBatchCost * 3 then
+                -- Nếu chưa đạt reserve nhưng tiền có sẵn gấp 3 lần lượt hatch: Hatch nhỏ giọt 20%
+                local disposable = coins * 0.2
+                allowedHatch = math.clamp(math.floor(disposable / eggCost), 1, accountMaxHatch)
+            else
+                state.hatchStatus = string.format("Tích quỹ mua nút đắt (%s / %s)", Network.shorten(coins), Network.shorten(btnPrice))
+                return
+            end
+        end
+    end
 
     -- Đảm bảo cutscene bị triệt tiêu
     EggHatch.installNoHatchAnimation()
 
     -- Gọi Remote mở trứng Custom (CustomEggs_Hatch)
-    local okH, resH = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggUid, maxHatch)
+    local okH, resH = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggUid, allowedHatch)
     if okH and (resH == true or type(resH) == "table") then
-        state.totalEggsHatched = (state.totalEggsHatched or 0) + maxHatch
+        state.totalEggsHatched = (state.totalEggsHatched or 0) + allowedHatch
     else
         -- Fallback thử với tên trứng eggName
         if targetEgg.eggName then
-            local okName, resName = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggName, maxHatch)
+            local okName, resName = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggName, allowedHatch)
             if okName and (resName == true or type(resName) == "table") then
-                state.totalEggsHatched = (state.totalEggsHatched or 0) + maxHatch
+                state.totalEggsHatched = (state.totalEggsHatched or 0) + allowedHatch
                 return
             end
         end
         -- Fallback với 1 quả nếu không đủ tiền mở full lượt
-        if maxHatch > 1 then
+        if allowedHatch > 1 then
             local ok1, res1 = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggUid, 1)
             if ok1 and (res1 == true or type(res1) == "table") then
                 state.totalEggsHatched = (state.totalEggsHatched or 0) + 1

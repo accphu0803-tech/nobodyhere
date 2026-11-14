@@ -83,7 +83,15 @@ local Config = {
     -- Tính năng phụ trợ
     AutoDaycare = false,
     AutoMailHuge = true,
+    MailRecipient = genv.MailRecipient or "Kizmoii_VNG",
     MailRetryInterval = 1800,
+    MailCooldownSec = 61,
+
+    -- Cân đối ngân sách Tycoon thông minh (Mua Button vs Mở Egg)
+    Economy = {
+        PrioritizeEggButtons = true,    -- Luôn gom 100% tiền mua ngay nút Egg & Zone khi xuất hiện
+        ReserveRatioForExpensive = 0.6, -- Với nút giá cao: Giữ 60% tiền làm quỹ tích lũy, dùng thặng dư hatch
+    },
 
     -- Discord Webhook
     Webhook = {

@@ -549,8 +549,48 @@ function TycoonFarm.farmBestPatchTick(state)
 end
 
 -- =========================================================================
--- 6. TỰ ĐỘNG MUA NÚT TYCOON (CHEAPEST FIRST) VÀ NHẬN THƯỞNG ĐẢO
+-- 6. TỰ ĐỘNG MUA NÚT TYCOON (CÂN ĐỐI NGÂN SÁCH THÔNG MINH) & NHẬN THƯỞNG ĐẢO
 -- =========================================================================
+
+-- Xác định nút mục tiêu tiếp theo để phân bổ ngân sách với việc mở trứng
+function TycoonFarm.getNextTargetButton(priceMult)
+    local plot = TycoonFarm.getPlot()
+    if not plot then return nil end
+
+    initGameLibs()
+    local buttonsState = plot:Save("Buttons") or {}
+    if not (PTButtons and type(PTButtons.Available) == "function" and type(PTButtons.Price) == "function") then
+        return nil
+    end
+
+    priceMult = priceMult or (ButtonsCmds and type(ButtonsCmds.PriceMult) == "function" and ButtonsCmds.PriceMult()) or 1
+    local avail = PTButtons.Available(buttonsState, 5, false, priceMult)
+    if not (type(avail) == "table" and #avail > 0) then
+        return nil
+    end
+
+    -- 1. ƯU TIÊN CAO NHẤT: Nút mở Trứng (Egg) hoặc Nút mở Khu vực (Zone)
+    for _, btn in ipairs(avail) do
+        local id = tostring(btn.Id or "")
+        if id:find("Egg") or id:find("Zone") or btn.Egg then
+            local price = PTButtons.Price(btn, priceMult)
+            return btn, price, true -- isMilestone = true
+        end
+    end
+
+    -- 2. Nếu không có nút Egg/Zone: Chọn nút rẻ nhất hiện có để đẩy nhanh tiến độ
+    local cheapestBtn = avail[1]
+    local minPrice = PTButtons.Price(cheapestBtn, priceMult)
+    for i = 2, #avail do
+        local p = PTButtons.Price(avail[i], priceMult)
+        if p < minPrice then
+            cheapestBtn = avail[i]
+            minPrice = p
+        end
+    end
+
+    return cheapestBtn, minPrice, false
+end
 
 function TycoonFarm.checkAndBuyButtons(state)
     if not Config.AutoBuyButtons then return end
@@ -573,31 +613,80 @@ function TycoonFarm.checkAndBuyButtons(state)
         end
     end
 
-    -- 2. Quét các nút có sẵn theo thứ tự Rẻ nhất trước (Cheapest First)
+    local coins = Network.currency(K.CURRENCY) or 0
+
+    -- 2. ƯU TIÊN MUA NÚT MỐC QUAN TRỌNG (Egg / Zone button) NGAY KHI ĐỦ COIN
+    local targetBtn, targetPrice, isMilestone = TycoonFarm.getNextTargetButton(priceMult)
+    if targetBtn and isMilestone and coins >= targetPrice then
+        local okB, resB = pcall(function()
+            return plot:Invoke(K.VERBS.BuyButton, targetBtn.Id)
+        end)
+        if okB and resB == true then
+            print(string.format("[KizHub Tycoon] 👑 ĐÃ MUA THÀNH CÔNG NÚT MỐC: %s (Giá: %s Coins)", tostring(targetBtn.Id), Network.shorten(targetPrice)))
+            task.wait(0.3)
+            return
+        else
+            -- Thử kích hoạt nút qua pad trong workspace.PumpkinTycoonPads
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local padFolder = workspace:FindFirstChild("PumpkinTycoonPads")
+            local pad = padFolder and padFolder:FindFirstChild(targetBtn.Id)
+            local touchPart = pad and (pad:FindFirstChild("Touch", true) or pad:FindFirstChild("Press", true) or pad:FindFirstChild("Base", true))
+            
+            if touchPart and typeof(firetouchinterest) == "function" and hrp then
+                firetouchinterest(hrp, touchPart, 0)
+                task.wait(0.05)
+                firetouchinterest(hrp, touchPart, 1)
+            end
+
+            -- Dự phòng: Di chuyển tạm thời đến vị trí bệ nút để kích hoạt
+            local padSpot = nil
+            if PTButtons and type(PTButtons.PadSpot) == "function" then
+                pcall(function() padSpot = PTButtons.PadSpot(plotModel, targetBtn) end)
+            end
+            if not padSpot and pad then
+                padSpot = pad:GetPivot()
+            end
+            if padSpot and hrp then
+                local padPos = (typeof(padSpot) == "CFrame" and padSpot.Position) or padSpot
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                    char:PivotTo(CFrame.new(padPos + Vector3.new(0, 3, 0)))
+                end)
+                task.wait(0.2)
+                pcall(function() plot:Invoke(K.VERBS.BuyButton, targetBtn.Id) end)
+                task.wait(0.2)
+                return
+            end
+        end
+    end
+
+    -- 3. Mua các nút có sẵn theo thứ tự Rẻ nhất trước (Cheapest First)
     if PTButtons and type(PTButtons.Available) == "function" and type(PTButtons.Price) == "function" then
         local avail = PTButtons.Available(buttonsState, 5, false, priceMult)
         if type(avail) == "table" and #avail > 0 then
-            local coins = Network.currency(K.CURRENCY) or 0
             for _, btn in ipairs(avail) do
                 local price = PTButtons.Price(btn, priceMult)
                 if coins >= price then
-                    -- Nếu chạy chế độ Legit, bước lên bệ pad của nút
-                    if Config.MovementMode == "Legit" and type(PTButtons.PadSpot) == "function" then
-                        local padSpot = PTButtons.PadSpot(plotModel, btn)
-                        if padSpot then
-                            TycoonFarm.moveTo(padSpot)
-                            task.wait(0.1)
-                        end
-                    end
-
                     local okB, resB = pcall(function()
                         return plot:Invoke(K.VERBS.BuyButton, btn.Id)
                     end)
-
-                    if okB then
+                    if okB and resB == true then
                         print(string.format("[KizHub Tycoon] ✔ Đã mua nút: %s (Giá: %s Coins)", tostring(btn.Id), Network.shorten(price)))
                         task.wait(0.2)
                         break
+                    else
+                        local padFolder = workspace:FindFirstChild("PumpkinTycoonPads")
+                        local pad = padFolder and padFolder:FindFirstChild(btn.Id)
+                        local touchPart = pad and (pad:FindFirstChild("Touch", true) or pad:FindFirstChild("Press", true))
+                        local char = LocalPlayer.Character
+                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                        if touchPart and typeof(firetouchinterest) == "function" and hrp then
+                            firetouchinterest(hrp, touchPart, 0)
+                            task.wait(0.05)
+                            firetouchinterest(hrp, touchPart, 1)
+                        end
                     end
                 end
             end
