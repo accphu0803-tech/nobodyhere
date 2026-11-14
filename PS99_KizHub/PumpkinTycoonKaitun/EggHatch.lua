@@ -179,8 +179,10 @@ function EggHatch.getBestUnlockedEgg()
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
 
-    -- Quét theo thứ tự ưu tiên từ bãi cao nhất (Zone 5) xuống bãi thấp nhất (Zone 1)
-    for _, zoneIdx in ipairs({ 5, 4, 3, 2, 1 }) do
+    local activeZone = (TycoonFarm and type(TycoonFarm.getActiveAreaIndex) == "function" and TycoonFarm.getActiveAreaIndex()) or 5
+
+    -- Quét theo thứ tự ưu tiên từ bãi hiện tại (activeZone) trở xuống bãi 1
+    for zoneIdx = activeZone, 1, -1 do
         local area = EGG_AREAS[zoneIdx]
         local expectedPos = nil
 

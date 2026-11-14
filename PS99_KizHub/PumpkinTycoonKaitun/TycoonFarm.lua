@@ -183,50 +183,35 @@ local FARM_AREAS = {
     [5] = {
         name = "Area 5 (Golden Grove)",
         displayName = "Golden Grove",
-        pathBtn = "Path_5",
-        zoneBtn = "GoldenGrove_Zone",
-        eggAttr = "GoldenGrove_Egg",
-        eggBtn = "GoldenGrove_Egg",
+        btnAliases = { "GoldenGrove_Egg", "GoldenGrove_Zone", "Path_5", "Path5", "GoldenGrove" },
         pedIndex = 5,
     },
     [4] = {
         name = "Area 4 (Cider Mill)",
         displayName = "Cider Mill",
         offset = Vector3.new(-70.41, 5.72, -300.74),
-        pathBtn = "Path_4",
-        zoneBtn = "CiderMill_Zone",
-        eggAttr = "CiderMill_Egg",
-        eggBtn = "CiderMill_Egg",
+        btnAliases = { "CiderMill_Egg", "CiderMill_Zone", "Path_4", "Path4", "CiderMill" },
         pedIndex = 4,
     },
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
         offset = Vector3.new(-198.58, 0.08, -50.60),
-        pathBtn = "Path_3",
-        zoneBtn = "HayrideHill_Zone",
-        eggAttr = "HayrideHill_Egg",
-        eggBtn = "HayrideHill_Egg",
+        btnAliases = { "HayrideHill_Egg", "HayrideHill_Zone", "Path_3", "Path3", "HayrideHill" },
         pedIndex = 3,
     },
     [2] = {
         name = "Area 2 (Apple Orchard)",
         displayName = "Apple Orchard",
         offset = Vector3.new(-138.68, 4.63, 161.97),
-        pathBtn = "Path_2",
-        zoneBtn = "AppleOrchard_Zone",
-        eggAttr = "AppleOrchard_Egg",
-        eggBtn = "AppleOrchard_Egg",
+        btnAliases = { "AppleOrchard_Egg", "AppleOrchard_Zone", "Path_2", "Path2", "AppleOrchard" },
         pedIndex = 2,
     },
     [1] = {
         name = "Area 1 (Cocoa Cabin)",
         displayName = "Cocoa Cabin",
         offset = Vector3.new(183.04, 3.86, 125.91),
-        pathBtn = nil,
-        zoneBtn = "CocoaCabin_Zone",
-        eggAttr = "CocoaCabin_Egg",
-        eggBtn = "CocoaCabin_Egg",
+        btnAliases = { "CocoaCabin_Egg", "CocoaCabin_Zone", "CocoaCabin" },
         pedIndex = 1,
     },
 }
@@ -264,75 +249,24 @@ function TycoonFarm.getActiveAreaIndex()
         end)
     end
 
-    local plotPivot = TycoonFarm.getPlotPivot()
-    local plotModel = TycoonFarm.getPlotModel()
-    local things = workspace:FindFirstChild("__THINGS")
-    local customEggs = things and things:FindFirstChild("CustomEggs")
-    local sectionsFolder = plotModel and plotModel:FindFirstChild("Sections")
-
     local function isButtonOwned(btnId)
         if not btnId then return false end
-        if buttonsState[btnId] == true then return true end
-        if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, btnId) then
-            return true
+        if buttonsState[btnId] == true or buttonsState[btnId] == 1 then return true end
+        if PTButtons and type(PTButtons.Owned) == "function" then
+            local okO, resO = pcall(PTButtons.Owned, buttonsState, btnId)
+            if okO and resO == true then return true end
         end
         return false
     end
 
-    -- Quét từ bãi cao nhất (Bãi 5) xuống bãi thấp nhất (Bãi 1)
-    for zoneIdx = 5, 1, -1 do
+    -- Quét từ bãi cao nhất (Bãi 5) xuống bãi 2: CHỈ trả về bãi khi ĐÃ MUA nút của bãi đó
+    for zoneIdx = 5, 2, -1 do
         local area = FARM_AREAS[zoneIdx]
-
-        -- A. Kiểm tra đã sở hữu nút mở Egg hoặc nút Zone hoặc nút Path dẫn đến bãi đó
-        if isButtonOwned(area.eggBtn) or isButtonOwned(area.zoneBtn) or isButtonOwned(area.pathBtn) then
-            return zoneIdx
-        end
-
-        -- B. Kiểm tra thư mục Plot.Sections (khi mua zone, khu vực sẽ xuất hiện trong Sections)
-        if sectionsFolder then
-            for _, sec in ipairs(sectionsFolder:GetChildren()) do
-                local zn = sec:GetAttribute("ZoneNumber") or tonumber(sec.Name:match("^(%d+)"))
-                local ts = sec:GetAttribute("TycoonSection") or ""
-                if zn == zoneIdx or sec.Name:find(area.displayName) or (area.displayName and ts:lower():find(area.displayName:gsub("%s+", ""):lower())) then
+        if area and area.btnAliases then
+            for _, alias in ipairs(area.btnAliases) do
+                if isButtonOwned(alias) then
                     return zoneIdx
                 end
-            end
-        end
-
-        -- C. Kiểm tra nếu có CustomEgg của bãi đó đã xuất hiện trên map
-        local eggPos = nil
-        if plotModel then
-            local eggAttr = plotModel:GetAttribute(area.eggAttr)
-            if typeof(eggAttr) == "CFrame" then
-                eggPos = eggAttr.Position
-            elseif typeof(eggAttr) == "Vector3" then
-                eggPos = eggAttr
-            end
-        end
-        if not eggPos and area.offset and plotPivot then
-            eggPos = plotPivot:PointToWorldSpace(area.offset)
-        end
-
-        if eggPos and customEggs then
-            for _, egg in ipairs(customEggs:GetChildren()) do
-                if (egg:GetPivot().Position - eggPos).Magnitude < 65 then
-                    return zoneIdx
-                end
-            end
-        end
-    end
-
-    -- D. Fallback nếu nhân vật đang đứng gần vị trí của bãi nào (trong phạm vi 100 studs)
-    local char, hrp = getCharacterParts()
-    if hrp and plotPivot then
-        for zoneIdx = 5, 2, -1 do
-            local area = FARM_AREAS[zoneIdx]
-            local targetPos = nil
-            if area.offset then
-                targetPos = plotPivot:PointToWorldSpace(area.offset)
-            end
-            if targetPos and (hrp.Position - targetPos).Magnitude <= 100 then
-                return zoneIdx
             end
         end
     end

@@ -19,6 +19,7 @@ local Config = {
 
     -- Farm đảo & Quái Bí Ngô
     AutoFarmTycoon = true,
+    ForceZone = nil, -- Đặt 1, 2, 3, 4, 5 nếu muốn cố định bãi farm; để nil để tự động theo tiến độ đảo
     BreakBigPumpkins = false,
     BigPumpkinMaxDistance = 400,
 
