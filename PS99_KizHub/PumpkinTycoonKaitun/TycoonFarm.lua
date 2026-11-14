@@ -521,9 +521,6 @@ function TycoonFarm.farmBestPatchTick(state)
     TycoonFarm.collectOrbsTick()
 end
 
-    TycoonFarm.collectOrbsTick()
-end
-
 -- =========================================================================
 -- 6. TỰ ĐỘNG MUA NÚT TYCOON (CHEAPEST FIRST) VÀ NHẬN THƯỞNG ĐẢO
 -- =========================================================================
