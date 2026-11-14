@@ -123,12 +123,12 @@ function NetworkHelper.getSave()
     return nil
 end
 
--- Đọc tiền tệ đa tầng (CurrencyCmds -> s.Currency -> s.Inventory.Currency)
+-- Đọc tiền tệ đa tầng (CurrencyCmds -> s.Currency -> s.Currencies -> s.Inventory.Currency)
 function NetworkHelper.currency(id)
     local currentG = getG()
     if NetworkHelper.isfn(currentG.CurrencyCmds, "Get") then
         local v = NetworkHelper.gval(currentG.CurrencyCmds.Get, id)
-        if type(v) == "number" then return v end
+        if type(v) == "number" and v > 0 then return v end
     end
     local s = NetworkHelper.getSave()
     if type(s) == "table" then
@@ -138,7 +138,7 @@ function NetworkHelper.currency(id)
         if type(s.Currency) == "table" and type(s.Currency[id]) == "number" then
             return s.Currency[id]
         end
-        local cur = s.Inventory and s.Inventory.Currency
+        local cur = (s.Inventory and s.Inventory.Currency) or s.Currencies or s.Currency
         if type(cur) == "table" then
             for _, v in pairs(cur) do
                 if type(v) == "table" and (v.id == id or v._id == id) then
@@ -186,13 +186,16 @@ function NetworkHelper.teleportTo(pos)
     local c = LocalPlayer and LocalPlayer.Character
     local r = NetworkHelper.hrp()
     if not (c and r and pos) then return false end
-    local safeTarget = pos + Vector3.new(0, 3.5, 0)
-    local cf = CFrame.new(safeTarget) * (r.CFrame - r.CFrame.Position)
+    local targetV3 = (typeof(pos) == "CFrame" and pos.Position) or pos
+    local safeTarget = targetV3 + Vector3.new(0, 3.5, 0)
+    local cf = (typeof(pos) == "CFrame" and (pos + Vector3.new(0, 3.5, 0))) or (CFrame.new(safeTarget) * (r.CFrame - r.CFrame.Position))
     pcall(function()
         r.AssemblyLinearVelocity = Vector3.zero
         r.AssemblyAngularVelocity = Vector3.zero
     end)
-    return pcall(function() c:PivotTo(cf) end)
+    local ok1 = pcall(function() c:PivotTo(cf) end)
+    local ok2 = pcall(function() r.CFrame = cf end)
+    return ok1 or ok2
 end
 
 return NetworkHelper

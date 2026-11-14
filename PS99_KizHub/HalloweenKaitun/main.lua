@@ -281,6 +281,7 @@ local sharedDeps = {
     inEvent       = inEvent,
     instanceModel = instanceModel,
     petEuids      = ZoneFarm.petEuids,
+    DashboardGui  = DashboardGui,
 }
 
 ZoneFarm.init(sharedDeps)

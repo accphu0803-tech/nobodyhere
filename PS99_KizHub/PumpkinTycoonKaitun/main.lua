@@ -369,15 +369,13 @@ task.spawn(function()
                 return
             end
 
-            -- 1. Ưu tiên cao nhất: Kiểm tra và đánh Bí Ngô Khổng Lồ nếu xuất hiện trên bệ
-            local isFightingBigPumpkin = TycoonFarm.breakBigPumpkinTick(state)
+            -- 1. Ưu tiên cao nhất: Đánh Bí Ngô Khổng Lồ trên bệ bằng Pet & Remote
+            TycoonFarm.breakBigPumpkinTick(state)
 
-            -- 2. Nếu không có Bí Ngô Khổng Lồ, tập trung farm bãi Patch tốt nhất
-            if not isFightingBigPumpkin then
-                TycoonFarm.farmBestPatchTick(state)
-            end
+            -- 2. Luôn duy trì farm bãi Patch tốt nhất (sweet spot)
+            TycoonFarm.farmBestPatchTick(state)
 
-            -- 3. Mở trứng Custom cao nhất từ xa (không xáo trộn vị trí farm)
+            -- 3. Mở trứng Custom cao nhất từ xa (tại sweet spot)
             EggHatch.hatchBestEggTick(state)
         end)
         task.wait(0.1)

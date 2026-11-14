@@ -115,6 +115,7 @@ local EGG_AREAS = {
         displayName = "Apple Orchard",
         offset = Vector3.new(-138.68, 4.63, 161.97),
         btnId = "AppleOrchard_Egg",
+        attrName = "AppleOrchard_Egg",
     },
     [1] = {
         name = "Egg 1 (Cocoa Cabin)",
@@ -122,6 +123,7 @@ local EGG_AREAS = {
         displayName = "Cocoa Cabin",
         offset = Vector3.new(183.04, 3.86, 125.91),
         btnId = "CocoaCabin_Egg",
+        attrName = "CocoaCabin_Egg",
     },
 }
 
@@ -132,19 +134,62 @@ function EggHatch.getBestUnlockedEgg()
 
     initEggLibs()
     local plotPivot = plotModel:GetPivot()
+
+    -- 1. Tìm CustomEggsCmds.All() từ client module
+    local allCustomEggs = nil
+    pcall(function()
+        if not CustomEggsCmds then
+            CustomEggsCmds = safeRequire({ "Library", "Client", "CustomEggsCmds" })
+        end
+        if CustomEggsCmds and type(CustomEggsCmds.All) == "function" then
+            allCustomEggs = CustomEggsCmds.All()
+        end
+    end)
+
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
 
-    if customEggsFolder then
-        -- Ưu tiên quét tìm Egg 2 trước, nếu chưa có (như ảnh dj gửi) thì rơi về Egg 1
-        for _, zoneIdx in ipairs({ 2, 1 }) do
-            local area = EGG_AREAS[zoneIdx]
-            local targetPos = plotPivot:PointToWorldSpace(area.offset)
+    -- Quét theo thứ tự ưu tiên: Zone 2 trước, nếu chưa mở khóa thì Zone 1
+    for _, zoneIdx in ipairs({ 2, 1 }) do
+        local area = EGG_AREAS[zoneIdx]
+        local expectedPos = nil
+
+        local eggAttr = plotModel:GetAttribute(area.attrName)
+        if typeof(eggAttr) == "CFrame" then
+            expectedPos = eggAttr.Position
+        elseif typeof(eggAttr) == "Vector3" then
+            expectedPos = eggAttr
+        elseif plotPivot then
+            expectedPos = plotPivot:PointToWorldSpace(area.offset)
+        end
+
+        -- A. Quét trong CustomEggsCmds.All()
+        if allCustomEggs and expectedPos then
+            for uid, eggObj in pairs(allCustomEggs) do
+                if type(eggObj) == "table" then
+                    local eggId = eggObj._id or ""
+                    local eggPos = eggObj._position or (eggObj._model and eggObj._model:GetPivot().Position)
+                    if eggPos and (eggPos - expectedPos).Magnitude <= 45 then
+                        return {
+                            zoneIndex = zoneIdx,
+                            eggName = area.eggName,
+                            eggBtnId = area.btnId,
+                            displayName = area.displayName,
+                            eggInstance = eggObj._model,
+                            eggUid = eggObj._uid or uid or (eggObj._model and eggObj._model.Name),
+                            pos = eggPos,
+                        }
+                    end
+                end
+            end
+        end
+
+        -- B. Quét trong workspace.__THINGS.CustomEggs
+        if customEggsFolder and expectedPos then
             local bestDist = 45
             local foundEgg = nil
-
             for _, egg in ipairs(customEggsFolder:GetChildren()) do
-                local dist = (egg:GetPivot().Position - targetPos).Magnitude
+                local dist = (egg:GetPivot().Position - expectedPos).Magnitude
                 if dist <= bestDist then
                     bestDist = dist
                     foundEgg = egg
@@ -158,13 +203,15 @@ function EggHatch.getBestUnlockedEgg()
                     eggBtnId = area.btnId,
                     displayName = area.displayName,
                     eggInstance = foundEgg,
-                    eggUid = foundEgg.Name, -- 32-char UUID
+                    eggUid = foundEgg.Name,
                     pos = foundEgg:GetPivot().Position,
                 }
             end
         end
+    end
 
-        -- Fallback: Quét bất kỳ CustomEgg nào gần đảo của mình (< 250 studs)
+    -- Fallback: Trứng nào gần plot nhất (< 250 studs)
+    if customEggsFolder and plotPivot then
         local bestPlotDist = 250
         local closestEgg = nil
         for _, egg in ipairs(customEggsFolder:GetChildren()) do
@@ -203,26 +250,41 @@ function EggHatch.hatchBestEggTick(state)
     if now - lastHatchAttempt < (Config.HatchDelay or 1.0) then return end
     lastHatchAttempt = now
 
-    local coins = Network.currency(K.CURRENCY)
-    if coins == nil then
+    local coins = Network.currency(K.CURRENCY) or 0
+    if coins <= 0 then
         local s = Network.getSave()
-        coins = (s and s.Currency and s.Currency[K.CURRENCY]) or (s and s[K.CURRENCY]) or 0
+        if s then
+            local cur = (s.Inventory and s.Inventory.Currency) or s.Currencies or s.Currency
+            if type(cur) == "table" then
+                for _, v in pairs(cur) do
+                    if type(v) == "table" and (v.id == K.CURRENCY or v._id == K.CURRENCY) then
+                        coins = tonumber(v._am or v.Amount) or 0
+                        break
+                    end
+                end
+            end
+        end
     end
-    if coins <= 0 then return end
+    -- Trứng Zone 1 cần tối thiểu 200 coins
+    if coins < 200 then return end
 
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
 
-    -- Đứng tại sweet spot trên đảo (trong phạm vi 45 studs của eggPos)
-    if targetEgg.pos then
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 45 then
-            return
-        end
-    end
+    state.currentEggName = targetEgg.eggName or "Cocoa Cabin Egg"
 
-    state.currentEggName = "Cocoa Cabin Egg"
+    -- Đảm bảo nhân vật ở tại phạm vi mở trứng (trong vòng 40 studs)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and targetEgg.pos and (hrp.Position - targetEgg.pos).Magnitude > 40 then
+        pcall(function()
+            local safePos = targetEgg.pos + Vector3.new(0, 2.5, 6)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            char:PivotTo(CFrame.new(safePos, targetEgg.pos))
+            hrp.CFrame = CFrame.new(safePos, targetEgg.pos)
+        end)
+    end
 
     -- Tính toán số lượng trứng tối đa có thể mở mỗi lần
     initEggLibs()
@@ -238,16 +300,29 @@ function EggHatch.hatchBestEggTick(state)
     -- Đảm bảo cutscene bị triệt tiêu
     EggHatch.installNoHatchAnimation()
 
-    -- Gọi Remote mở trứng Custom từ xa (CustomEggs_Hatch)
+    -- Gọi Remote mở trứng Custom (CustomEggs_Hatch)
     local okH, resH = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggUid, maxHatch)
     if okH and (resH == true or type(resH) == "table") then
         state.totalEggsHatched = (state.totalEggsHatched or 0) + maxHatch
     else
+        -- Fallback thử với tên trứng eggName
+        if targetEgg.eggName then
+            local okName, resName = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggName, maxHatch)
+            if okName and (resName == true or type(resName) == "table") then
+                state.totalEggsHatched = (state.totalEggsHatched or 0) + maxHatch
+                return
+            end
+        end
         -- Fallback với 1 quả nếu không đủ tiền mở full lượt
         if maxHatch > 1 then
             local ok1, res1 = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggUid, 1)
             if ok1 and (res1 == true or type(res1) == "table") then
                 state.totalEggsHatched = (state.totalEggsHatched or 0) + 1
+            elseif targetEgg.eggName then
+                local ok1N, res1N = Network.netInvoke("CustomEggs_Hatch", targetEgg.eggName, 1)
+                if ok1N and (res1N == true or type(res1N) == "table") then
+                    state.totalEggsHatched = (state.totalEggsHatched or 0) + 1
+                end
             end
         end
     end

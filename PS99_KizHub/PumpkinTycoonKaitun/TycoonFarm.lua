@@ -114,87 +114,25 @@ function TycoonFarm.moveTo(targetPosOrCF)
     local char, hrp, hum = getCharacterParts()
     if not hrp or not hum then return end
 
-    local mode = Config.MovementMode or "Rage"
-    if mode == "Rage" then
-        Network.teleportTo(typeof(targetPosOrCF) == "CFrame" and targetPosOrCF or CFrame.new(targetPos + Vector3.new(0, 2, 0)))
-        return
-    end
+    local cf = typeof(targetPosOrCF) == "CFrame" and targetPosOrCF or CFrame.new(targetPos + Vector3.new(0, 2.5, 0))
 
-    -- Chế độ Legit: Dùng PathfindingService, kiểm tra raycast chướng ngại và né rơi xuống nước (Y < 1998.5)
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 2.5,
-        AgentHeight = 5,
-        AgentCanJump = true,
-        AgentCanClimb = false,
-        WaypointSpacing = 4,
-    })
-
-    local startPos = hrp.Position
-    local okP, _ = pcall(function() path:ComputeAsync(startPos, targetPos) end)
-
-    if not okP or path.Status ~= Enum.PathStatus.Success then
-        -- Pathfinding không tìm được đường an toàn -> Fallback teleport an toàn
-        Network.teleportTo(CFrame.new(targetPos + Vector3.new(0, 2, 0)))
-        return
-    end
-
-    local waypoints = path:GetWaypoints()
-    for i, wp in ipairs(waypoints) do
-        if not char.Parent or hum.Health <= 0 then break end
-
-        -- Cảnh báo rơi xuống nước: Mực nước là Y=1995. Nếu tọa độ bước đi < 1998.5 -> Teleport thẳng đến đích
-        if wp.Position.Y < 1998.5 then
-            Network.teleportTo(CFrame.new(targetPos + Vector3.new(0, 2, 0)))
-            return
-        end
-
-        -- Nhảy chướng ngại vật
-        if wp.Action == Enum.PathWaypointAction.Jump then
-            hum.Jump = true
-        else
-            -- Raycast kiểm tra chướng ngại trước mặt để chủ động nhảy
-            local forwardDir = (wp.Position - hrp.Position).Unit
-            local rayParams = RaycastParams.new()
-            rayParams.FilterDescendantsInstances = { char }
-            rayParams.FilterType = EnumRaycastFilterType.Exclude
-
-            local hit = workspace:Raycast(hrp.Position, forwardDir * 3, rayParams)
-            if hit and hit.Instance and hit.Instance.CanCollide then
-                hum.Jump = true
-            end
-        end
-
-        hum:MoveTo(wp.Position)
-
-        -- Chờ nhân vật tới gần waypoint
-        local t0 = os.clock()
-        while (hrp.Position - wp.Position).Magnitude > 3.5 do
-            if os.clock() - t0 > 1.2 then
-                -- Bị kẹt -> Nhảy
-                hum.Jump = true
-                break
-            end
-            task.wait(0.05)
-        end
-    end
-
-    if (hrp.Position - targetPos).Magnitude > 4 then
-        hum:MoveTo(targetPos)
-    end
+    -- Teleport tức thì, chống rơi rụng hoặc lag vật lý
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        char:PivotTo(cf)
+        hrp.CFrame = cf
+    end)
+    pcall(function()
+        Network.teleportTo(targetPos)
+    end)
 end
 
 -- =========================================================================
 -- 3. QUẢN LÝ QUY TẮC AUTOBREAK, PEDESTAL VÀ AUTO FARM SỰ KIỆN
 -- =========================================================================
 
-function TycoonFarm.getPlotCFrame()
-    local plot = TycoonFarm.getPlot()
-    if plot and type(plot.GetCFrame) == "function" then
-        local ok, cf = pcall(plot.GetCFrame, plot)
-        if ok and typeof(cf) == "CFrame" then
-            return cf
-        end
-    end
+function TycoonFarm.getPlotPivot()
     local plotModel = TycoonFarm.getPlotModel()
     if plotModel and typeof(plotModel) == "Instance" then
         local okP, pcf = pcall(function() return plotModel:GetPivot() end)
@@ -205,17 +143,32 @@ function TycoonFarm.getPlotCFrame()
             return plotModel.PrimaryPart.CFrame
         end
     end
+    local plot = TycoonFarm.getPlot()
+    if plot and type(plot.GetCFrame) == "function" then
+        local ok, cf = pcall(plot.GetCFrame, plot)
+        if ok and typeof(cf) == "CFrame" then
+            return cf
+        end
+    end
     return nil
+end
+
+function TycoonFarm.getPlotCFrame()
+    return TycoonFarm.getPlotPivot()
 end
 
 local FARM_AREAS = {
     [1] = {
         name = "Area 1 (Cocoa Cabin)",
         offset = Vector3.new(183.04, 3.86, 125.91),
+        eggAttr = "CocoaCabin_Egg",
+        eggBtn = "CocoaCabin_Egg",
     },
     [2] = {
         name = "Area 2 (Apple Orchard)",
         offset = Vector3.new(-138.68, 4.63, 161.97),
+        eggAttr = "AppleOrchard_Egg",
+        eggBtn = "AppleOrchard_Egg",
     },
 }
 
@@ -226,23 +179,34 @@ function TycoonFarm.getActiveAreaIndex()
     initGameLibs()
     local buttonsState = plot:Save("Buttons") or {}
 
-    -- 1. Kiểm tra qua PTButtons.FarmZone
-    if PTButtons and type(PTButtons.FarmZone) == "function" then
-        local zone = PTButtons.FarmZone(buttonsState, 5)
-        if zone and zone >= 2 then
-            return 2
-        end
+    -- 1. Nếu đã mua nút AppleOrchard_Egg (Nút $31k mở Egg 2)
+    if buttonsState["AppleOrchard_Egg"] == true then
+        return 2
+    end
+    if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, "AppleOrchard_Egg") then
+        return 2
     end
 
-    -- 2. Kiểm tra nếu có CustomEgg ở bãi 2 (đã mua nút Egg 2)
-    local plotCF = TycoonFarm.getPlotCFrame()
-    if plotCF then
+    -- 2. Kiểm tra nếu có CustomEgg ở bãi 2 (đã xuất hiện trên map)
+    local plotPivot = TycoonFarm.getPlotPivot()
+    local plotModel = TycoonFarm.getPlotModel()
+    local egg2Pos = nil
+    if plotModel then
+        local eggAttr = plotModel:GetAttribute("AppleOrchard_Egg")
+        if typeof(eggAttr) == "CFrame" then
+            egg2Pos = eggAttr.Position
+        end
+    end
+    if not egg2Pos and plotPivot then
+        egg2Pos = plotPivot:PointToWorldSpace(FARM_AREAS[2].offset)
+    end
+
+    if egg2Pos then
         local things = workspace:FindFirstChild("__THINGS")
         local customEggs = things and things:FindFirstChild("CustomEggs")
         if customEggs then
-            local pos2 = plotCF:PointToWorldSpace(FARM_AREAS[2].offset)
             for _, egg in ipairs(customEggs:GetChildren()) do
-                if (egg:GetPivot().Position - pos2).Magnitude < 45 then
+                if (egg:GetPivot().Position - egg2Pos).Magnitude < 45 then
                     return 2
                 end
             end
@@ -253,27 +217,19 @@ function TycoonFarm.getActiveAreaIndex()
 end
 
 function TycoonFarm.getSweetPos()
-    local plotCF = TycoonFarm.getPlotCFrame()
-    if plotCF then
-        local areaIdx = TycoonFarm.getActiveAreaIndex()
-        local areaData = FARM_AREAS[areaIdx] or FARM_AREAS[1]
-        return plotCF:PointToWorldSpace(areaData.offset)
+    local areaIdx = TycoonFarm.getActiveAreaIndex()
+    local areaData = FARM_AREAS[areaIdx] or FARM_AREAS[1]
+
+    local plotPivot = TycoonFarm.getPlotPivot()
+    if plotPivot then
+        return plotPivot:PointToWorldSpace(areaData.offset)
     end
 
     local plotModel = TycoonFarm.getPlotModel()
     if plotModel then
-        if PTButtons and type(PTButtons.ZoneSlab) == "function" then
-            local okSlab, slab = pcall(PTButtons.ZoneSlab, plotModel, 1)
-            if okSlab and slab and slab:IsA("BasePart") then
-                return slab.Position + Vector3.new(0, 3, 0)
-            end
-        end
-
-        local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg") or plotModel:GetAttribute("CocoaCabinEgg")
+        local eggAttr = plotModel:GetAttribute(areaData.eggAttr)
         if typeof(eggAttr) == "CFrame" then
-            return eggAttr.Position + Vector3.new(0, 2, 12)
-        elseif typeof(eggAttr) == "Vector3" then
-            return eggAttr + Vector3.new(0, 2, 12)
+            return eggAttr.Position + Vector3.new(0, 2, 8)
         end
     end
 
@@ -462,21 +418,19 @@ function TycoonFarm.breakBigPumpkinTick(state)
     if not Config.BreakBigPumpkins then return false end
     local bp = TycoonFarm.findActiveBigPumpkin()
     if not bp then
-        if state.excursion and state.excursion:find("Bí Ngô") then
+        if state and state.excursion and state.excursion:find("Bí Ngô") then
             state.excursion = nil
+            local sweetPos = TycoonFarm.getSweetPos()
+            if sweetPos then
+                TycoonFarm.moveTo(sweetPos)
+            end
         end
         return false
     end
 
     state.excursion = "Phá Bí Ngô Khổng Lồ (Bậc " .. tostring(bp.rung) .. ")"
 
-    -- Di chuyển lại gần Bí Ngô nếu khoảng cách > 15 studs
-    local char, hrp = getCharacterParts()
-    if hrp and (hrp.Position - bp.pos).Magnitude > 15 then
-        TycoonFarm.moveTo(CFrame.new(bp.pos + Vector3.new(0, 3, 8), bp.pos))
-    end
-
-    -- Gửi toàn bộ Pet trang bị vào tấn công Bí Ngô Khổng Lồ (PlayerPet.GetByPlayer -> SetAnchored, SetTarget)
+    -- Gửi toàn bộ Pet trang bị vào tấn công Bí Ngô Khổng Lồ (PlayerPet -> SetAnchored, SetTarget)
     local playerPets = getPlayerPets()
     for _, pet in ipairs(playerPets) do
         if pet.SetAnchored then pet:SetAnchored(false) end
@@ -495,7 +449,7 @@ function TycoonFarm.breakBigPumpkinTick(state)
         end)
     end
 
-    -- Đánh tay (Player Deal Damage)
+    -- Đánh tay từ xa (Player Deal Damage)
     pcall(function()
         Network.netFire("Breakables_PlayerDealDamage", tonumber(bp.uid) or bp.uid)
     end)

@@ -20,31 +20,126 @@ function EggHatch.init(deps)
     K = deps.K
 end
 
--- Vô hiệu hóa hoạt ảnh (Animation) mở trứng để tăng tốc độ hatch tối đa
+local isNoEggAnimInstalled = false
+
+-- Vô hiệu hóa toàn diện hoạt ảnh (Animation) mở trứng
+-- Xử lý: Hook Egg Opening Frontend, Tắt Remote OnClientEvent, Xóa EggOpenAnimation GUI, Ngắt Mouse Click
 function EggHatch.installNoHatchAnimation()
+    if isNoEggAnimInstalled then return end
+    isNoEggAnimInstalled = true
+
     task.spawn(function()
-        for attempt = 1, 15 do
-            local ok, hooked = pcall(function()
+        local Players = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+        local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+
+        -- 1. Quét và triệt tiêu UI animation "EggOpenAnimation" trong PlayerGui
+        local function cleanEggGuis()
+            if not PlayerGui then return end
+            for _, name in ipairs({ "EggOpenAnimation", "EggOpeningAnimation", "EggOpening", "EggsOpening" }) do
+                local g = PlayerGui:FindFirstChild(name)
+                if g then
+                    pcall(function()
+                        if g:IsA("ScreenGui") then g.Enabled = false end
+                        g:Destroy()
+                    end)
+                end
+            end
+        end
+        cleanEggGuis()
+        pcall(function()
+            PlayerGui.ChildAdded:Connect(function(child)
+                local n = child.Name:lower()
+                if n:find("eggopen") or n:find("eggopening") or n:find("egg_open") then
+                    task.defer(function()
+                        pcall(function()
+                            if child:IsA("ScreenGui") then child.Enabled = false end
+                            child:Destroy()
+                        end)
+                    end)
+                end
+            end)
+        end)
+
+        -- 2. Hook liên tục LocalScript "Egg Opening Frontend" trong PlayerScripts
+        for attempt = 1, 30 do
+            local hookedFrontend = false
+            pcall(function()
+                local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+                local scripts = ps and ps:FindFirstChild("Scripts")
+                local gameFolder = scripts and scripts:FindFirstChild("Game")
+                local eggScript = (gameFolder and gameFolder:FindFirstChild("Egg Opening Frontend"))
+                    or (ps and ps:FindFirstChild("Egg Opening Frontend", true))
+
+                if eggScript and type(getsenv) == "function" then
+                    local env = getsenv(eggScript)
+                    if type(env) == "table" and type(env.PlayEggAnimation) == "function" then
+                        if type(hookfunction) == "function" then
+                            hookfunction(env.PlayEggAnimation, function(...) return end)
+                        end
+                        env.PlayEggAnimation = function(...) return end
+                        if type(env.PlayAnimation) == "function" then
+                            if type(hookfunction) == "function" then
+                                hookfunction(env.PlayAnimation, function(...) return end)
+                            end
+                            env.PlayAnimation = function(...) return end
+                        end
+                        hookedFrontend = true
+                    end
+                end
+            end)
+
+            -- 3. Tắt RemoteEvent OnClientEvent của "Eggs_PlayOpenAnimation"
+            pcall(function()
+                local netFolder = RS:FindFirstChild("Network")
+                local remote = netFolder and netFolder:FindFirstChild("Eggs_PlayOpenAnimation")
+                if remote and type(getconnections) == "function" then
+                    for _, conn in ipairs(getconnections(remote.OnClientEvent)) do
+                        pcall(function() conn:Disable() end)
+                    end
+                end
+            end)
+
+            -- 4. Hook fallback trên ModuleScript EggCmds nếu có
+            pcall(function()
                 local eggCmds = RS:FindFirstChild("Library")
                     and RS.Library:FindFirstChild("Client")
                     and RS.Library.Client:FindFirstChild("EggCmds")
-                if not eggCmds or type(getsenv) ~= "function" then return false end
-                local env = getsenv(eggCmds)
-                if type(env) == "table" and type(env.PlayEggAnimation) == "function" then
-                    env.PlayEggAnimation = function() return end
-                    return true
+                if eggCmds and type(getsenv) == "function" then
+                    local env = getsenv(eggCmds)
+                    if type(env) == "table" and type(env.PlayEggAnimation) == "function" then
+                        if type(hookfunction) == "function" then
+                            hookfunction(env.PlayEggAnimation, function(...) return end)
+                        end
+                        env.PlayEggAnimation = function(...) return end
+                    end
                 end
-                return false
             end)
 
-            if ok and hooked == true then break end
+            -- 5. Tắt animation click listener trên mouse
+            pcall(function()
+                local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+                local frontend = ps and ps:FindFirstChild("Egg Opening Frontend", true)
+                if frontend and type(getconnections) == "function" then
+                    local source = frontend:GetFullName()
+                    for _, conn in ipairs(getconnections(LocalPlayer:GetMouse().Button1Down)) do
+                        if conn.Function and debug.info(conn.Function, "s") == source then
+                            pcall(function() conn:Disable() end)
+                        end
+                    end
+                end
+            end)
+
+            if hookedFrontend then
+                print("[KizHub EggHatch] Đã disable Egg Animation thành công!")
+                break
+            end
             task.wait(1.0)
         end
     end)
 
     pcall(function()
-        if type(G.PlayerPet) == "table" and type(G.PlayerPet.CalculateSpeedMultiplier) == "function" then
-            local orig = G.PlayerPet.CalculateSpeedMultiplier
+        if G and type(G.PlayerPet) == "table" and type(G.PlayerPet.CalculateSpeedMultiplier) == "function" then
             G.PlayerPet.CalculateSpeedMultiplier = function(...)
                 return 10
             end

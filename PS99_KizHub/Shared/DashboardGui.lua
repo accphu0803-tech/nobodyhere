@@ -52,17 +52,20 @@ local function getSafeGuiParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
--- Chuyển đổi trạng thái hiển thị Blackout Màn Hình Đen & 3D Rendering
+local savedBlackoutBeforeExcursion = nil
+
+-- Chuyển đổi trạng thái hiển thị Blackout Màn Hình Đen, 3D Rendering & GUI Card
 function DashboardGui.setBlackout(visible)
     isBlackoutVisible = visible
     if BlackBackground then
         BlackBackground.Visible = visible
     end
     if KizCard then
-        KizCard.Visible = true
+        KizCard.Visible = visible
     end
     if TopBadge then
         TopBadge.BackgroundColor3 = visible and Color3.fromRGB(15, 23, 42) or Color3.fromRGB(30, 41, 59)
+        TopBadge.Text = visible and (TopBadge:GetAttribute("OrigText") or "👑 Kiz Hub | Blackout ON") or "👑 Kiz Hub (Ấn hoặc Right Ctrl để bật)"
     end
     pcall(function()
         if RunService:IsClient() and type(RunService.Set3dRenderingEnabled) == "function" then
@@ -74,6 +77,30 @@ end
 function DashboardGui.toggleBlackout()
     DashboardGui.setBlackout(not isBlackoutVisible)
 end
+
+-- Tạm ẩn GUI & Blackout khi nhân vật đi thực hiện Excursion (như Combine, Craft, Upgrades)
+function DashboardGui.hideForExcursion()
+    savedBlackoutBeforeExcursion = isBlackoutVisible
+    if isBlackoutVisible then
+        DashboardGui.setBlackout(false)
+    end
+end
+
+-- Khôi phục trạng thái Blackout sau khi hoàn tất Excursion
+function DashboardGui.restoreAfterExcursion()
+    if savedBlackoutBeforeExcursion ~= nil then
+        DashboardGui.setBlackout(savedBlackoutBeforeExcursion)
+        savedBlackoutBeforeExcursion = nil
+    end
+end
+
+-- Export toàn cục để các module khác dễ dàng truy cập
+pcall(function()
+    _G.DashboardGui = DashboardGui
+    if type(getgenv) == "function" then
+        getgenv().DashboardGui = DashboardGui
+    end
+end)
 
 function DashboardGui.destroy()
     if ScreenGui then
@@ -137,7 +164,7 @@ function DashboardGui.create(config)
     BlackBackground.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     BlackBackground.BorderSizePixel = 0
     BlackBackground.ZIndex = 0
-    BlackBackground.Active = true
+    BlackBackground.Active = false
     BlackBackground.Visible = enableBlackout
 
     -- Áp dụng tắt 3D Rendering ngay từ đầu nếu bật blackout
@@ -159,6 +186,7 @@ function DashboardGui.create(config)
     TopBadge.BorderSizePixel = 0
     TopBadge.AutoButtonColor = true
     TopBadge.Text = badgeText
+    TopBadge:SetAttribute("OrigText", badgeText)
     TopBadge.Font = Enum.Font.GothamBold
     TopBadge.TextSize = 11
     TopBadge.TextColor3 = Color3.fromRGB(224, 242, 254)
@@ -474,11 +502,13 @@ function DashboardGui.create(config)
     DiscordLabel.ZIndex = 4
     uiElements.DiscordLabel = DiscordLabel
 
-    -- Phím tắt RightControl: Ẩn / Hiện GUI
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        if input.KeyCode == toggleKey then
-            DashboardGui.toggleBlackout()
+    -- Phím tắt RightControl: Ẩn / Hiện GUI & Blackscreen
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == toggleKey or input.KeyCode == Enum.KeyCode.RightControl then
+            local focused = UserInputService:GetFocusedTextBox()
+            if not focused or input.KeyCode == Enum.KeyCode.RightControl then
+                DashboardGui.toggleBlackout()
+            end
         end
     end)
 
