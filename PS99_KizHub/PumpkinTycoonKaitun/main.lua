@@ -275,7 +275,9 @@ task.spawn(function()
                 ui.UptimeLabel.Text = string.format("Uptime: %02d:%02d:%02d", hrs, mins, secs)
             end
             if ui.ZoneLabel then
-                ui.ZoneLabel.Text = string.format("Pumpkin Tycoon Island • Xây đảo: %d/%d (%.0f%%) • %d hatched", prog.ownedButtons, prog.totalButtons, prog.percent * 100, state.totalEggsHatched or 0)
+                local areaIdx = (TycoonFarm and type(TycoonFarm.getActiveAreaIndex) == "function" and TycoonFarm.getActiveAreaIndex()) or 1
+                local areaName = (areaIdx == 2) and "Bãi 2 (Apple Orchard)" or "Bãi 1 (Cocoa Cabin)"
+                ui.ZoneLabel.Text = string.format("Pumpkin Tycoon • %s • Xây: %d/%d (%.0f%%) • %d hatched", areaName, prog.ownedButtons, prog.totalButtons, prog.percent * 100, state.totalEggsHatched or 0)
             end
             if ui.CombineLabel then
                 ui.CombineLabel.Text = string.format("🎃 Big Pumpkin: %s • AutoFarm: %s • Move: %s", prog.activeBigPumpkins > 0 and ("CÓ (Bậc " .. (prog.activeBigPumpkinRung or 1) .. ")") or "Không", state.autoFarmActive and "BẬT" or "TẮT", Config.MovementMode or "Rage")

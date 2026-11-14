@@ -208,10 +208,56 @@ function TycoonFarm.getPlotCFrame()
     return nil
 end
 
+local FARM_AREAS = {
+    [1] = {
+        name = "Area 1 (Cocoa Cabin)",
+        offset = Vector3.new(183.04, 3.86, 125.91),
+    },
+    [2] = {
+        name = "Area 2 (Apple Orchard)",
+        offset = Vector3.new(-138.68, 4.63, 161.97),
+    },
+}
+
+function TycoonFarm.getActiveAreaIndex()
+    local plot = TycoonFarm.getPlot()
+    if not plot then return 1 end
+
+    initGameLibs()
+    local buttonsState = plot:Save("Buttons") or {}
+
+    -- 1. Kiểm tra qua PTButtons.FarmZone
+    if PTButtons and type(PTButtons.FarmZone) == "function" then
+        local zone = PTButtons.FarmZone(buttonsState, 5)
+        if zone and zone >= 2 then
+            return 2
+        end
+    end
+
+    -- 2. Kiểm tra nếu có CustomEgg ở bãi 2 (đã mua nút Egg 2)
+    local plotCF = TycoonFarm.getPlotCFrame()
+    if plotCF then
+        local things = workspace:FindFirstChild("__THINGS")
+        local customEggs = things and things:FindFirstChild("CustomEggs")
+        if customEggs then
+            local pos2 = plotCF:PointToWorldSpace(FARM_AREAS[2].offset)
+            for _, egg in ipairs(customEggs:GetChildren()) do
+                if (egg:GetPivot().Position - pos2).Magnitude < 45 then
+                    return 2
+                end
+            end
+        end
+    end
+
+    return 1
+end
+
 function TycoonFarm.getSweetPos()
     local plotCF = TycoonFarm.getPlotCFrame()
     if plotCF then
-        return plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
+        local areaIdx = TycoonFarm.getActiveAreaIndex()
+        local areaData = FARM_AREAS[areaIdx] or FARM_AREAS[1]
+        return plotCF:PointToWorldSpace(areaData.offset)
     end
 
     local plotModel = TycoonFarm.getPlotModel()

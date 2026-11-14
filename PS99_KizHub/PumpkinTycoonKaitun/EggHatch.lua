@@ -108,87 +108,83 @@ local function getPlotModel()
     return plots and plots:FindFirstChild(plotId)
 end
 
+local EGG_AREAS = {
+    [2] = {
+        name = "Egg 2 (Apple Orchard)",
+        eggName = "Apple Orchard Egg",
+        displayName = "Apple Orchard",
+        offset = Vector3.new(-138.68, 4.63, 161.97),
+        btnId = "AppleOrchard_Egg",
+    },
+    [1] = {
+        name = "Egg 1 (Cocoa Cabin)",
+        eggName = "Cocoa Cabin Egg",
+        displayName = "Cocoa Cabin",
+        offset = Vector3.new(183.04, 3.86, 125.91),
+        btnId = "CocoaCabin_Egg",
+    },
+}
+
 function EggHatch.getBestUnlockedEgg()
     local plot = getPlot()
     local plotModel = getPlotModel()
     if not plot or not plotModel then return nil end
 
     initEggLibs()
-    local buttonsState = plot:Save("Buttons") or {}
-
-    local isUnlocked = false
-    if PTButtons and type(PTButtons.Owned) == "function" then
-        isUnlocked = PTButtons.Owned(buttonsState, "CocoaCabin_Egg")
-    else
-        isUnlocked = (buttonsState["CocoaCabin_Egg"] == true or buttonsState["CocoaCabin_Egg"] == 1)
-    end
-
-    -- Tìm vị trí egg từ thuộc tính hoặc ước lượng từ CFrame của đảo
-    local eggPos = nil
-    local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg") or plotModel:GetAttribute("CocoaCabinEgg")
-    if typeof(eggAttr) == "CFrame" then
-        eggPos = eggAttr.Position
-    elseif typeof(eggAttr) == "Vector3" then
-        eggPos = eggAttr
-    end
-
     local plotPivot = plotModel:GetPivot()
-    local estimatedEggPos = plotPivot:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00)) - Vector3.new(0, 2, 12)
-    local targetPos = eggPos or estimatedEggPos
-
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
-    local eggInstance = nil
-    local eggUid = nil
 
     if customEggsFolder then
-        local bestDist = 45
-        for _, egg in ipairs(customEggsFolder:GetChildren()) do
-            local dist = (egg:GetPivot().Position - targetPos).Magnitude
-            if dist <= bestDist then
-                bestDist = dist
-                eggInstance = egg
-                eggUid = egg.Name -- 32-char UUID (e.g. "9cc0a4a2b51d4c64a17705d461d9c26c")
-                eggPos = egg:GetPivot().Position
-            end
-        end
+        -- Ưu tiên quét tìm Egg 2 trước, nếu chưa có (như ảnh dj gửi) thì rơi về Egg 1
+        for _, zoneIdx in ipairs({ 2, 1 }) do
+            local area = EGG_AREAS[zoneIdx]
+            local targetPos = plotPivot:PointToWorldSpace(area.offset)
+            local bestDist = 45
+            local foundEgg = nil
 
-        -- Nếu chưa tìm thấy trong phạm vi 45 studs, quét toàn bộ CustomEggs trên đảo (< 250 studs)
-        if not eggUid then
-            local bestPlotDist = 250
             for _, egg in ipairs(customEggsFolder:GetChildren()) do
-                local dist = (egg:GetPivot().Position - plotPivot.Position).Magnitude
-                if dist <= bestPlotDist then
-                    bestPlotDist = dist
-                    eggInstance = egg
-                    eggUid = egg.Name
-                    eggPos = egg:GetPivot().Position
+                local dist = (egg:GetPivot().Position - targetPos).Magnitude
+                if dist <= bestDist then
+                    bestDist = dist
+                    foundEgg = egg
                 end
             end
+
+            if foundEgg then
+                return {
+                    zoneIndex = zoneIdx,
+                    eggName = area.eggName,
+                    eggBtnId = area.btnId,
+                    displayName = area.displayName,
+                    eggInstance = foundEgg,
+                    eggUid = foundEgg.Name, -- 32-char UUID
+                    pos = foundEgg:GetPivot().Position,
+                }
+            end
         end
-    end
 
-    -- Nếu tìm thấy model CustomEgg trên đảo của mình -> Trứng chắc chắn đã mở khóa!
-    if eggUid and eggPos then
-        return {
-            eggName = "Cocoa Cabin Egg",
-            eggBtnId = "CocoaCabin_Egg",
-            displayName = "Cocoa Cabin",
-            eggInstance = eggInstance,
-            eggUid = eggUid,
-            pos = eggPos,
-        }
-    end
-
-    if isUnlocked and targetPos then
-        return {
-            eggName = "Cocoa Cabin Egg",
-            eggBtnId = "CocoaCabin_Egg",
-            displayName = "Cocoa Cabin",
-            eggInstance = nil,
-            eggUid = nil,
-            pos = targetPos,
-        }
+        -- Fallback: Quét bất kỳ CustomEgg nào gần đảo của mình (< 250 studs)
+        local bestPlotDist = 250
+        local closestEgg = nil
+        for _, egg in ipairs(customEggsFolder:GetChildren()) do
+            local dist = (egg:GetPivot().Position - plotPivot.Position).Magnitude
+            if dist <= bestPlotDist then
+                bestPlotDist = dist
+                closestEgg = egg
+            end
+        end
+        if closestEgg then
+            return {
+                zoneIndex = 1,
+                eggName = "Cocoa Cabin Egg",
+                eggBtnId = "CocoaCabin_Egg",
+                displayName = "Cocoa Cabin",
+                eggInstance = closestEgg,
+                eggUid = closestEgg.Name,
+                pos = closestEgg:GetPivot().Position,
+            }
+        end
     end
 
     return nil
