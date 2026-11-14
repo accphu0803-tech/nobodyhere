@@ -158,17 +158,37 @@ function TycoonFarm.getPlotCFrame()
 end
 
 local FARM_AREAS = {
-    [1] = {
-        name = "Area 1 (Cocoa Cabin)",
-        offset = Vector3.new(183.04, 3.86, 125.91),
-        eggAttr = "CocoaCabin_Egg",
-        eggBtn = "CocoaCabin_Egg",
+    [5] = {
+        name = "Area 5 (Golden Grove)",
+        displayName = "Golden Grove",
+        eggAttr = "GoldenGrove_Egg",
+        eggBtn = "GoldenGrove_Egg",
+    },
+    [4] = {
+        name = "Area 4 (Cider Mill)",
+        displayName = "Cider Mill",
+        eggAttr = "CiderMill_Egg",
+        eggBtn = "CiderMill_Egg",
+    },
+    [3] = {
+        name = "Area 3 (Hayride Hill)",
+        displayName = "Hayride Hill",
+        eggAttr = "HayrideHill_Egg",
+        eggBtn = "HayrideHill_Egg",
     },
     [2] = {
         name = "Area 2 (Apple Orchard)",
+        displayName = "Apple Orchard",
         offset = Vector3.new(-138.68, 4.63, 161.97),
         eggAttr = "AppleOrchard_Egg",
         eggBtn = "AppleOrchard_Egg",
+    },
+    [1] = {
+        name = "Area 1 (Cocoa Cabin)",
+        displayName = "Cocoa Cabin",
+        offset = Vector3.new(183.04, 3.86, 125.91),
+        eggAttr = "CocoaCabin_Egg",
+        eggBtn = "CocoaCabin_Egg",
     },
 }
 
@@ -178,36 +198,40 @@ function TycoonFarm.getActiveAreaIndex()
 
     initGameLibs()
     local buttonsState = plot:Save("Buttons") or {}
-
-    -- 1. Nếu đã mua nút AppleOrchard_Egg (Nút $31k mở Egg 2)
-    if buttonsState["AppleOrchard_Egg"] == true then
-        return 2
-    end
-    if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, "AppleOrchard_Egg") then
-        return 2
-    end
-
-    -- 2. Kiểm tra nếu có CustomEgg ở bãi 2 (đã xuất hiện trên map)
     local plotPivot = TycoonFarm.getPlotPivot()
     local plotModel = TycoonFarm.getPlotModel()
-    local egg2Pos = nil
-    if plotModel then
-        local eggAttr = plotModel:GetAttribute("AppleOrchard_Egg")
-        if typeof(eggAttr) == "CFrame" then
-            egg2Pos = eggAttr.Position
-        end
-    end
-    if not egg2Pos and plotPivot then
-        egg2Pos = plotPivot:PointToWorldSpace(FARM_AREAS[2].offset)
-    end
+    local things = workspace:FindFirstChild("__THINGS")
+    local customEggs = things and things:FindFirstChild("CustomEggs")
 
-    if egg2Pos then
-        local things = workspace:FindFirstChild("__THINGS")
-        local customEggs = things and things:FindFirstChild("CustomEggs")
-        if customEggs then
+    -- Quét từ bãi cao nhất (Bãi 5) xuống bãi thấp nhất (Bãi 1)
+    for zoneIdx = 5, 1, -1 do
+        local area = FARM_AREAS[zoneIdx]
+        -- 1. Kiểm tra đã sở hữu nút mở Egg của bãi đó chưa
+        if buttonsState[area.eggBtn] == true then
+            return zoneIdx
+        end
+        if PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, area.eggBtn) then
+            return zoneIdx
+        end
+
+        -- 2. Kiểm tra nếu có CustomEgg của bãi đó đã xuất hiện trên map
+        local eggPos = nil
+        if plotModel then
+            local eggAttr = plotModel:GetAttribute(area.eggAttr)
+            if typeof(eggAttr) == "CFrame" then
+                eggPos = eggAttr.Position
+            elseif typeof(eggAttr) == "Vector3" then
+                eggPos = eggAttr
+            end
+        end
+        if not eggPos and area.offset and plotPivot then
+            eggPos = plotPivot:PointToWorldSpace(area.offset)
+        end
+
+        if eggPos and customEggs then
             for _, egg in ipairs(customEggs:GetChildren()) do
-                if (egg:GetPivot().Position - egg2Pos).Magnitude < 45 then
-                    return 2
+                if (egg:GetPivot().Position - eggPos).Magnitude < 45 then
+                    return zoneIdx
                 end
             end
         end
@@ -221,7 +245,7 @@ function TycoonFarm.getSweetPos()
     local areaData = FARM_AREAS[areaIdx] or FARM_AREAS[1]
 
     local plotPivot = TycoonFarm.getPlotPivot()
-    if plotPivot then
+    if areaData.offset and plotPivot then
         return plotPivot:PointToWorldSpace(areaData.offset)
     end
 
@@ -229,7 +253,9 @@ function TycoonFarm.getSweetPos()
     if plotModel then
         local eggAttr = plotModel:GetAttribute(areaData.eggAttr)
         if typeof(eggAttr) == "CFrame" then
-            return eggAttr.Position + Vector3.new(0, 2, 8)
+            return eggAttr.Position + Vector3.new(0, 2.5, 8)
+        elseif typeof(eggAttr) == "Vector3" then
+            return eggAttr + Vector3.new(0, 2.5, 8)
         end
     end
 

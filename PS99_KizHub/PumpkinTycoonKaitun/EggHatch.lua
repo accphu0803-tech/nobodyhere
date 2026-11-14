@@ -111,6 +111,30 @@ local function getPlotModel()
 end
 
 local EGG_AREAS = {
+    [5] = {
+        name = "Egg 5 (Golden Grove)",
+        eggName = "Golden Grove Egg",
+        displayName = "Golden Grove",
+        btnId = "GoldenGrove_Egg",
+        attrName = "GoldenGrove_Egg",
+        unitCost = 15000,
+    },
+    [4] = {
+        name = "Egg 4 (Cider Mill)",
+        eggName = "Cider Mill Egg",
+        displayName = "Cider Mill",
+        btnId = "CiderMill_Egg",
+        attrName = "CiderMill_Egg",
+        unitCost = 8000,
+    },
+    [3] = {
+        name = "Egg 3 (Hayride Hill)",
+        eggName = "Hayride Hill Egg",
+        displayName = "Hayride Hill",
+        btnId = "HayrideHill_Egg",
+        attrName = "HayrideHill_Egg",
+        unitCost = 4000,
+    },
     [2] = {
         name = "Egg 2 (Apple Orchard)",
         eggName = "Apple Orchard Egg",
@@ -118,6 +142,7 @@ local EGG_AREAS = {
         offset = Vector3.new(-138.68, 4.63, 161.97),
         btnId = "AppleOrchard_Egg",
         attrName = "AppleOrchard_Egg",
+        unitCost = 1000,
     },
     [1] = {
         name = "Egg 1 (Cocoa Cabin)",
@@ -126,6 +151,7 @@ local EGG_AREAS = {
         offset = Vector3.new(183.04, 3.86, 125.91),
         btnId = "CocoaCabin_Egg",
         attrName = "CocoaCabin_Egg",
+        unitCost = 200,
     },
 }
 
@@ -151,8 +177,8 @@ function EggHatch.getBestUnlockedEgg()
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
 
-    -- Quét theo thứ tự ưu tiên: Zone 2 trước, nếu chưa mở khóa thì Zone 1
-    for _, zoneIdx in ipairs({ 2, 1 }) do
+    -- Quét theo thứ tự ưu tiên từ bãi cao nhất (Zone 5) xuống bãi thấp nhất (Zone 1)
+    for _, zoneIdx in ipairs({ 5, 4, 3, 2, 1 }) do
         local area = EGG_AREAS[zoneIdx]
         local expectedPos = nil
 
@@ -161,7 +187,7 @@ function EggHatch.getBestUnlockedEgg()
             expectedPos = eggAttr.Position
         elseif typeof(eggAttr) == "Vector3" then
             expectedPos = eggAttr
-        elseif plotPivot then
+        elseif area.offset and plotPivot then
             expectedPos = plotPivot:PointToWorldSpace(area.offset)
         end
 

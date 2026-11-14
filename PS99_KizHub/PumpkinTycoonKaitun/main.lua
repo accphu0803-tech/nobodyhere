@@ -281,7 +281,14 @@ task.spawn(function()
             end
             if ui.ZoneLabel then
                 local areaIdx = (TycoonFarm and type(TycoonFarm.getActiveAreaIndex) == "function" and TycoonFarm.getActiveAreaIndex()) or 1
-                local areaName = (areaIdx == 2) and "Bãi 2 (Apple Orchard)" or "Bãi 1 (Cocoa Cabin)"
+                local ZONE_NAMES = {
+                    [1] = "Bãi 1 (Cocoa Cabin)",
+                    [2] = "Bãi 2 (Apple Orchard)",
+                    [3] = "Bãi 3 (Hayride Hill)",
+                    [4] = "Bãi 4 (Cider Mill)",
+                    [5] = "Bãi 5 (Golden Grove - Max)",
+                }
+                local areaName = ZONE_NAMES[areaIdx] or ("Bãi " .. tostring(areaIdx))
                 ui.ZoneLabel.Text = string.format("Pumpkin Tycoon • %s • Xây: %d/%d (%.0f%%) • %d hatched", areaName, prog.ownedButtons, prog.totalButtons, prog.percent * 100, state.totalEggsHatched or 0)
             end
             if ui.CombineLabel then
