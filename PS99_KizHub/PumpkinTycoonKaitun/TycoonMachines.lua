@@ -155,14 +155,24 @@ local lastMerchantCheck = 0
 local function runMerchantAndStock(plot, buttonsState)
     if not (Config.AutoMerchant or Config.AutoPlaceStock) then return end
     local now = os.clock()
-    if now - lastMerchantCheck < (Config.MerchantInterval or 5) then return end
+    if now - lastMerchantCheck < (Config.MerchantInterval or 3) then return end
     lastMerchantCheck = now
 
     local hasMerchant = false
     if PTButtons and type(PTButtons.Owned) == "function" then
-        hasMerchant = PTButtons.Owned(buttonsState, "Merchant")
-    else
-        hasMerchant = (buttonsState["Merchant"] == true or buttonsState["Merchant"] == 1)
+        hasMerchant = PTButtons.Owned(buttonsState, "Merchant") or PTButtons.Owned(buttonsState, "PumpkinMerchant") or PTButtons.Owned(buttonsState, "MerchantStand")
+    end
+    if not hasMerchant then
+        hasMerchant = (buttonsState["Merchant"] == true or buttonsState["Merchant"] == 1 or buttonsState["PumpkinMerchant"] == true or buttonsState["MerchantStand"] == true)
+    end
+    if not hasMerchant and MerchantCmds and type(MerchantCmds.Unlocked) == "function" then
+        pcall(function()
+            hasMerchant = (MerchantCmds.Unlocked() == true)
+        end)
+    end
+    -- Fallback: Nếu không đọc được nút nhưng plot tồn tại thì luôn thử thực thi an toàn
+    if not hasMerchant and plot then
+        hasMerchant = true
     end
     if not hasMerchant then return end
 
@@ -170,11 +180,11 @@ local function runMerchantAndStock(plot, buttonsState)
     pcall(function()
         local mAuto = plot:Save("MerchantAuto")
         if mAuto == false then
-            plot:Invoke(K.VERBS.AutoMerchant, true)
+            plot:Invoke(K.VERBS.AutoMerchant or "AutoMerchant", true)
         end
     end)
 
-    -- 2. Mua hàng Merchant theo thứ tự Rarity Band nếu kho Stock còn slot
+    -- 2. Tự động mua hàng Merchant theo thứ tự Rarity Band nếu kho Stock còn chỗ
     if Config.AutoMerchant then
         pcall(function()
             local stockData = plot:Save("Stock")
@@ -182,16 +192,24 @@ local function runMerchantAndStock(plot, buttonsState)
             local maxSlots = (MerchantCmds and type(MerchantCmds.Slots) == "function" and MerchantCmds.Slots()) or 8
 
             if #stockList < maxSlots then
-                local bands = Config.MerchantBandOrder or { "ExoticPlus", "MythicalPlus", "LegendaryPlus", "EpicPlus", "RarePlus" }
+                -- Thử gọi trực tiếp MerchantCmds client nếu có
+                if MerchantCmds then
+                    if type(MerchantCmds.Buy) == "function" then pcall(MerchantCmds.Buy) end
+                    if type(MerchantCmds.BuyAll) == "function" then pcall(MerchantCmds.BuyAll) end
+                end
+
+                local bands = Config.MerchantBandOrder or { "ExoticPlus", "MythicalPlus", "LegendaryPlus", "EpicPlus", "RarePlus", "Exotic", "Mythical", "Legendary", "Epic", "Rare" }
                 for _, band in ipairs(bands) do
                     local okB = pcall(function()
-                        plot:Invoke(K.VERBS.BuyStock, band)
+                        plot:Invoke(K.VERBS.BuyStock or "BuyStock", band)
                     end)
                     if okB then
-                        task.wait(0.1)
-                        break
+                        task.wait(0.08)
                     end
                 end
+                pcall(function()
+                    plot:Invoke(K.VERBS.BuyStock or "BuyStock")
+                end)
             end
         end)
     end
@@ -201,7 +219,7 @@ local function runMerchantAndStock(plot, buttonsState)
         pcall(function()
             local spAuto = plot:Save("StockAutoPlace")
             if spAuto == false then
-                plot:Invoke(K.VERBS.AutoPlaceStock, true)
+                plot:Invoke(K.VERBS.AutoPlaceStock or "AutoPlaceStock", true)
             end
         end)
 
@@ -217,14 +235,13 @@ local function runMerchantAndStock(plot, buttonsState)
                     local isUnlocked = (type(ped) == "table" and ped.Locked ~= true)
 
                     if pIdx and isEmpty and isUnlocked then
-                        -- Lấy band tốt nhất trong kho
                         local bestBand = stock[1]
                         if type(bestBand) == "table" and bestBand.Band then
                             bestBand = bestBand.Band
                         end
                         if bestBand then
-                            plot:Invoke(K.VERBS.PlaceStock, pIdx, bestBand)
-                            task.wait(0.15)
+                            plot:Invoke(K.VERBS.PlaceStock or "PlaceStock", pIdx, bestBand)
+                            task.wait(0.12)
                         end
                     end
                 end
@@ -385,23 +402,58 @@ local lastGiftCheck = 0
 local function runFlannelGifts(plot)
     if not Config.AutoOpenFlannelGifts then return end
     local now = os.clock()
-    if now - lastGiftCheck < (Config.GiftOpenInterval or 10) then return end
+    if now - lastGiftCheck < (Config.GiftOpenInterval or 5) then return end
     lastGiftCheck = now
 
     pcall(function()
         local s = Network.getSave()
-        local lootboxes = s and s.Inventory and s.Inventory.Lootbox
-        if type(lootboxes) == "table" then
-            for uid, item in pairs(lootboxes) do
-                if type(item) == "table" and (item.id == "Flannel Gift" or tostring(item.id):find("Flannel")) then
-                    local am = math.clamp(tonumber(item._am) or 1, 1, 10)
-                    -- Thử gọi verb plot trước, sau đó fallback sang remote game
-                    plot:Invoke(K.VERBS.OpenGift, am)
-                    Network.netInvoke("PumpkinTycoon_GiftOpen", am)
-                    Network.netInvoke("Lootbox: Open", uid, am)
-                    print(string.format("[KizHub Tycoon] 🎁 Đã mở %d Quà Flannel Gift!", am))
-                    task.wait(0.3)
-                    break
+        local inv = s and s.Inventory
+        if not inv then return end
+
+        local targetCategories = { "Lootbox", "Box", "Gift", "Misc", "Consumable" }
+        for _, cat in ipairs(targetCategories) do
+            local folder = inv[cat]
+            if type(folder) == "table" then
+                for uid, item in pairs(folder) do
+                    if type(item) == "table" then
+                        local itemId = tostring(item.id or item._id or uid or "")
+                        if itemId:lower():find("flannel") then
+                            local am = tonumber(item._am or item.Amount or item.am or 1) or 1
+                            local count = math.clamp(am, 1, 100)
+
+                            print(string.format("[KizHub Tycoon] 🎁 Đang tự động mở %d Flannel Gift (Cat: %s, ID: %s)...", count, cat, itemId))
+
+                            -- 1. Client module LootboxCmds
+                            pcall(function()
+                                local lbMod = safeRequire({ "Library", "Client", "LootboxCmds" })
+                                if lbMod and type(lbMod.Open) == "function" then
+                                    lbMod.Open(itemId, count)
+                                end
+                            end)
+
+                            -- 2. Remotes qua Network
+                            Network.netInvoke("Lootbox: Open", itemId, count)
+                            Network.netFire("Lootbox: Open", itemId, count)
+                            Network.netInvoke("Lootbox: Open", uid, count)
+                            Network.netFire("Lootbox: Open", uid, count)
+                            Network.netInvoke("GiftBag: Open", uid, count)
+                            Network.netFire("GiftBag: Open", uid, count)
+                            Network.netInvoke("GiftBag_Open", uid, count)
+
+                            -- 3. Verbs trên Plot
+                            if plot then
+                                pcall(function()
+                                    plot:Invoke(K.VERBS.OpenGift or "OpenGift", count)
+                                end)
+                                pcall(function()
+                                    Network.netInvoke("PumpkinTycoon_GiftOpen", count)
+                                end)
+                            end
+
+                            task.wait(0.2)
+                            break
+                        end
+                    end
                 end
             end
         end

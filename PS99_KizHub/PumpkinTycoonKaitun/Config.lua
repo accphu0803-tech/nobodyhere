@@ -67,18 +67,23 @@ local Config = {
     -- Merchant & Quầy hàng Pedestal
     AutoMerchant = true,
     AutoPlaceStock = true,
-    MerchantInterval = 5,
+    MerchantInterval = 3,
     MerchantBandOrder = {
         "ExoticPlus",
         "MythicalPlus",
         "LegendaryPlus",
         "EpicPlus",
         "RarePlus",
+        "Exotic",
+        "Mythical",
+        "Legendary",
+        "Epic",
+        "Rare",
     },
 
     -- Quà Flannel & Quà miễn phí
     AutoOpenFlannelGifts = true,
-    GiftOpenInterval = 10,
+    GiftOpenInterval = 4,
     AutoClaimFreeGifts = true,
 
     -- Tính năng phụ trợ
