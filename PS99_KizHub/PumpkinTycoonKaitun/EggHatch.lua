@@ -111,10 +111,13 @@ end
 function EggHatch.getBestUnlockedEgg()
     local plot = getPlot()
     local plotModel = getPlotModel()
-    if not plot then return nil end
+    if not plot or not plotModel then return nil end
 
     initEggLibs()
     local buttonsState = plot:Save("Buttons") or {}
+
+    local things = workspace:FindFirstChild("__THINGS")
+    local customEggsFolder = things and things:FindFirstChild("CustomEggs")
 
     -- Quét từ Zone 5 (Golden Grove) xuống Zone 1 (Cocoa Cabin)
     for zoneIdx = 5, 1, -1 do
@@ -128,53 +131,42 @@ function EggHatch.getBestUnlockedEgg()
         end
 
         if isUnlocked then
-            -- Tìm Instance CustomEgg tương ứng trên workspace hoặc qua thư viện CustomEggs
+            -- Lấy vị trí nút Trứng từ plotModel:GetAttribute(zoneInfo.EggBtn)
+            local eggAttr = plotModel:GetAttribute(zoneInfo.EggBtn)
+            local eggPos = nil
+            if typeof(eggAttr) == "CFrame" then
+                eggPos = eggAttr.Position
+            elseif typeof(eggAttr) == "Vector3" then
+                eggPos = eggAttr
+            end
+
+            -- Match the unlocked zoneInfo.EggBtn by finding the CustomEggs child within 25 studs of plotModel:GetAttribute(zoneInfo.EggBtn).Position
             local eggInstance = nil
             local eggUid = nil
 
-            -- 1. Tìm trong workspace.__THINGS.CustomEggs
-            local things = workspace:FindFirstChild("__THINGS")
-            local customEggs = things and things:FindFirstChild("CustomEggs")
-            if customEggs then
-                local bestDist = 80
-                local plotPos = plotModel and plotModel:GetPivot().Position
-                for _, egg in ipairs(customEggs:GetChildren()) do
-                    local name = egg.Name:lower()
-                    local searchName = zoneInfo.Egg:lower()
-                    local matchName = name:find(searchName) or searchName:find(name)
-                    if matchName or egg:GetAttribute("Egg") == zoneInfo.Egg then
+            if eggPos and customEggsFolder then
+                local bestDist = 25
+                for _, egg in ipairs(customEggsFolder:GetChildren()) do
+                    local dist = (egg:GetPivot().Position - eggPos).Magnitude
+                    if dist <= bestDist then
+                        bestDist = dist
                         eggInstance = egg
-                        eggUid = egg.Name
-                        break
-                    elseif plotPos and (egg:GetPivot().Position - plotPos).Magnitude < bestDist then
-                        bestDist = (egg:GetPivot().Position - plotPos).Magnitude
-                        eggInstance = egg
-                        eggUid = egg.Name
+                        eggUid = egg.Name -- 32-char UUID
                     end
                 end
             end
 
-            -- 2. Fallback tìm qua CustomEggsCmds
-            if not eggUid and CustomEggsCmds and type(CustomEggsCmds.All) == "function" then
-                local ok, all = pcall(CustomEggsCmds.All)
-                if ok and type(all) == "table" then
-                    for uid, data in pairs(all) do
-                        if type(data) == "table" and (data.Name == zoneInfo.Egg or data._id == zoneInfo.Egg) then
-                            eggUid = uid
-                            break
-                        end
-                    end
-                end
+            if eggUid then
+                return {
+                    zoneIndex = zoneIdx,
+                    eggName = zoneInfo.Egg,
+                    eggBtnId = zoneInfo.EggBtn,
+                    displayName = zoneInfo.DisplayName,
+                    eggInstance = eggInstance,
+                    eggUid = eggUid,
+                    pos = eggPos or (eggInstance and eggInstance:GetPivot().Position),
+                }
             end
-
-            return {
-                zoneIndex = zoneIdx,
-                eggName = zoneInfo.Egg,
-                eggBtnId = zoneInfo.EggBtn,
-                displayName = zoneInfo.DisplayName,
-                eggInstance = eggInstance,
-                eggUid = eggUid or zoneInfo.Egg,
-            }
         end
     end
 
@@ -199,6 +191,15 @@ function EggHatch.hatchBestEggTick(state)
 
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
+
+    -- Ensure player is within 42 studs of targetEgg.pos before invoking CustomEggs_Hatch
+    if targetEgg.pos then
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 42 then
+            return
+        end
+    end
 
     state.currentEggName = targetEgg.displayName .. " Egg"
 

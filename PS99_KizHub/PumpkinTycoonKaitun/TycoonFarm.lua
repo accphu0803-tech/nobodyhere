@@ -25,6 +25,7 @@ local IslandCmds = nil
 local PTButtons = nil
 local ButtonsCmds = nil
 local BreakableFrontend = nil
+local AutoFarmCmds = nil
 
 local function safeRequire(pathTbl)
     local cur = ReplicatedStorage
@@ -48,6 +49,9 @@ local function initGameLibs()
     end
     if not BreakableFrontend then
         BreakableFrontend = safeRequire({ "Library", "Client", "BreakableFrontend" })
+    end
+    if not AutoFarmCmds then
+        AutoFarmCmds = safeRequire({ "Library", "Client", "AutoFarmCmds" })
     end
 end
 
@@ -176,12 +180,27 @@ function TycoonFarm.moveTo(targetPosOrCF)
 end
 
 -- =========================================================================
--- 3. QUẢN LÝ QUY TẮC AUTOBREAK VÀ MỞ KHÓA PEDESTAL
+-- 3. QUẢN LÝ QUY TẮC AUTOBREAK, PEDESTAL VÀ AUTO FARM SỰ KIỆN
 -- =========================================================================
+
+function TycoonFarm.ensureAutoFarmEnabled()
+    pcall(function()
+        if not AutoFarmCmds then
+            AutoFarmCmds = safeRequire({ "Library", "Client", "AutoFarmCmds" })
+        end
+        if AutoFarmCmds and type(AutoFarmCmds.IsEnabled) == "function" and type(AutoFarmCmds.Enable) == "function" then
+            if not AutoFarmCmds.IsEnabled() then
+                AutoFarmCmds.Enable()
+            end
+        end
+    end)
+end
 
 function TycoonFarm.ensureAutoBreakZero()
     local plot = TycoonFarm.getPlot()
     if not plot then return end
+
+    TycoonFarm.ensureAutoFarmEnabled()
 
     pcall(function()
         local autoBreak = plot:Save("AutoBreak")
@@ -363,41 +382,84 @@ function TycoonFarm.farmBestPatchTick(state)
     if not plot or not plotModel then return end
 
     initGameLibs()
+    TycoonFarm.ensureAutoFarmEnabled()
+
     local buttonsState = plot:Save("Buttons") or {}
     local bestZone = 1
     if PTButtons and type(PTButtons.FarmZone) == "function" then
         bestZone = PTButtons.FarmZone(buttonsState, 5) or 1
     end
 
-    -- Tìm vị trí tâm bãi Patch của khu vực
-    local patchPos = nil
-    if PTButtons and type(PTButtons.ZoneSlab) == "function" then
+    local zoneData = K.ZONES[bestZone]
+    if not zoneData then return end
+
+    -- 1. Tìm section của zone trong plotModel.Sections
+    local secFolder = plotModel:FindFirstChild("Sections")
+    local zoneSection = nil
+    if secFolder then
+        for _, ch in ipairs(secFolder:GetChildren()) do
+            local attrSec = ch:GetAttribute("TycoonSection")
+            if (attrSec and zoneData.Section and attrSec == zoneData.Section)
+                or (zoneData.DisplayName and ch.Name:find(zoneData.DisplayName, 1, true)) then
+                zoneSection = ch
+                break
+            end
+        end
+    end
+
+    -- 2. Xác định tâm section (section center)
+    local secCenter = nil
+    if zoneSection then
+        local slab = zoneSection:FindFirstChild("ZoneSlab", true) or zoneSection:FindFirstChild("Slab", true)
+        if slab and slab:IsA("BasePart") then
+            secCenter = slab.Position
+        else
+            secCenter = zoneSection:GetPivot().Position
+        end
+    end
+
+    if not secCenter and PTButtons and type(PTButtons.ZoneSlab) == "function" then
         local slab = PTButtons.ZoneSlab(plotModel, bestZone)
         if slab and slab:IsA("BasePart") then
-            patchPos = slab.Position + Vector3.new(0, 3, 0)
+            secCenter = slab.Position
         end
     end
 
-    if not patchPos then
-        local secFolder = plotModel:FindFirstChild("Sections")
-        local zoneData = K.ZONES[bestZone]
-        local sec = secFolder and zoneData and secFolder:FindFirstChild(zoneData.Section)
-        local slab = sec and (sec:FindFirstChild("ZoneSlab", true) or sec:FindFirstChild("Slab", true))
-        if slab and slab:IsA("BasePart") then
-            patchPos = slab.Position + Vector3.new(0, 3, 0)
-        elseif sec then
-            patchPos = sec:GetPivot().Position + Vector3.new(0, 3, 0)
-        end
+    -- 3. Xác định vị trí nút Trứng từ plotModel:GetAttribute(zoneData.EggBtn)
+    local eggAttr = zoneData.EggBtn and plotModel:GetAttribute(zoneData.EggBtn)
+    local eggPos = nil
+    if typeof(eggAttr) == "CFrame" then
+        eggPos = eggAttr.Position
+    elseif typeof(eggAttr) == "Vector3" then
+        eggPos = eggAttr
     end
 
-    if not patchPos then return end
+    -- 4. Tính toán sweet spot
+    local sweetSpot = nil
+    local okCF, plotCF = pcall(function() return plot:GetCFrame() end)
+    if bestZone == 1 and okCF and plotCF then
+        sweetSpot = plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
+    elseif eggPos and secCenter then
+        local dir = (secCenter - eggPos)
+        if dir.Magnitude > 0 then
+            sweetSpot = eggPos + dir.Unit * math.min(25, dir.Magnitude * 0.5)
+        else
+            sweetSpot = eggPos
+        end
+    elseif secCenter then
+        sweetSpot = secCenter + Vector3.new(0, 3, 0)
+    elseif eggPos then
+        sweetSpot = eggPos + Vector3.new(0, 3, 0)
+    end
+
+    if not sweetSpot then return end
 
     local char, hrp = getCharacterParts()
-    if hrp and (hrp.Position - patchPos).Magnitude > 22 then
-        TycoonFarm.moveTo(patchPos)
+    if hrp and (hrp.Position - sweetSpot).Magnitude > 6 then
+        TycoonFarm.moveTo(sweetSpot)
     end
 
-    -- Quét quặng trong bãi và điều phối pet
+    -- Quét quặng trong bán kính 55 studs và điều phối pet
     local pets = TycoonFarm.petEuids()
     if #pets > 0 then
         local things = workspace:FindFirstChild("__THINGS")
@@ -405,8 +467,13 @@ function TycoonFarm.farmBestPatchTick(state)
         if breakables then
             local targets = {}
             for _, b in ipairs(breakables:GetChildren()) do
-                if b:IsA("Model") and (b:GetPivot().Position - patchPos).Magnitude < 35 then
-                    table.insert(targets, b.Name)
+                if b:IsA("Model") then
+                    local bPos = b:GetPivot().Position
+                    local distSweet = (bPos - sweetSpot).Magnitude
+                    local distPlayer = hrp and (bPos - hrp.Position).Magnitude or 999
+                    if distSweet <= 55 or distPlayer <= 55 then
+                        table.insert(targets, b.Name)
+                    end
                 end
             end
             if #targets > 0 then
