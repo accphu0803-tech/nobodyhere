@@ -202,7 +202,6 @@ local FARM_AREAS = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
         offset = Vector3.new(-200.72, 0.08, -53.77),
-        worldCFrame = CFrame.new(6338.77, 2007.58, 7799.28),
         pathBtn = "Path_3",
         zoneBtn = "HayrideHill_Zone",
         eggAttr = "HayrideHill_Egg",
@@ -309,11 +308,8 @@ function TycoonFarm.getActiveAreaIndex()
                 eggPos = eggAttr
             end
         end
-        if not eggPos and area.worldCFrame then
-            eggPos = area.worldCFrame.Position
-        elseif not eggPos and area.offset and plotPivot then
-            local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
-            eggPos = pivotPos + area.offset
+        if not eggPos and area.offset and plotPivot then
+            eggPos = plotPivot:PointToWorldSpace(area.offset)
         end
 
         if eggPos and customEggs then
@@ -331,11 +327,8 @@ function TycoonFarm.getActiveAreaIndex()
         for zoneIdx = 5, 2, -1 do
             local area = FARM_AREAS[zoneIdx]
             local targetPos = nil
-            if area.worldCFrame then
-                targetPos = area.worldCFrame.Position
-            elseif area.offset then
-                local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
-                targetPos = pivotPos + area.offset
+            if area.offset then
+                targetPos = plotPivot:PointToWorldSpace(area.offset)
             end
             if targetPos and (hrp.Position - targetPos).Magnitude <= 100 then
                 return zoneIdx
@@ -353,36 +346,55 @@ function TycoonFarm.getSweetPos()
     local plotPivot = TycoonFarm.getPlotPivot()
     local plotModel = TycoonFarm.getPlotModel()
 
-    -- 1. Ưu tiên cao nhất: Tọa độ World CFrame chuẩn xác tuyệt đối (nếu cùng plot/server)
-    if areaData.worldCFrame then
-        if plotPivot then
-            local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
-            local dist = (pivotPos - areaData.worldCFrame.Position).Magnitude
-            if dist < 350 then
-                return areaData.worldCFrame.Position
-            end
-        else
-            return areaData.worldCFrame.Position
-        end
-    end
-
-    -- 2. Tọa độ theo offset thế giới thẳng (pivotPos + offset, không bị xoay ma trận)
+    -- 1. Chuẩn toán học đảo: Biến đổi Relative Offset qua ma trận xoay của Plot (giống chuẩn Bãi 1 & 2)
+    local basePos = nil
     if areaData.offset and plotPivot then
-        local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
-        return pivotPos + areaData.offset
-    end
-
-    -- 3. Fallback theo Attribute CFrame trên PlotModel
-    if plotModel and areaData.eggAttr then
+        basePos = plotPivot:PointToWorldSpace(areaData.offset)
+    elseif plotModel and areaData.eggAttr then
         local eggAttr = plotModel:GetAttribute(areaData.eggAttr)
         if typeof(eggAttr) == "CFrame" then
-            return eggAttr.Position + Vector3.new(0, 2.5, 8)
+            basePos = eggAttr.Position + Vector3.new(0, 2.5, 8)
         elseif typeof(eggAttr) == "Vector3" then
-            return eggAttr + Vector3.new(0, 2.5, 8)
+            basePos = eggAttr + Vector3.new(0, 2.5, 8)
         end
     end
 
-    return nil
+    if not basePos then return nil end
+
+    -- 2. AUTO-SNAP: Kiểm tra mật độ quặng xung quanh basePos
+    -- Nếu basePos rơi vào bãi đất trống (không có quặng nào trong vòng 35 studs),
+    -- tự động tìm tâm của cụm quặng gần nhất của bãi hiện tại (trong cự ly 120 studs) để kéo nhân vật vào tâm farm!
+    pcall(function()
+        if BreakableFrontend and type(BreakableFrontend.AllByInstanceAndClass) == "function" then
+            local ok, normals = pcall(BreakableFrontend.AllByInstanceAndClass, "Normal")
+            if ok and type(normals) == "table" then
+                local nearbyCount = 0
+                local clusterSum = Vector3.zero
+                local clusterCount = 0
+                for k, v in pairs(normals) do
+                    local brk = getBrkData(k, v)
+                    local isTycoon = (brk.parentID == "PumpkinTycoon") or (brk.model and brk.model:GetAttribute("ParentID") == "PumpkinTycoon")
+                    if isTycoon and brk.position then
+                        local d = (brk.position - basePos).Magnitude
+                        if d <= 35 then
+                            nearbyCount = nearbyCount + 1
+                        end
+                        if d <= 120 then
+                            clusterSum = clusterSum + brk.position
+                            clusterCount = clusterCount + 1
+                        end
+                    end
+                end
+                -- Nếu vị trí đứng không có quặng nào nhưng gần đó có cụm quặng (>= 3 quặng)
+                if nearbyCount == 0 and clusterCount >= 3 then
+                    local avgCenter = clusterSum / clusterCount
+                    basePos = Vector3.new(avgCenter.X, basePos.Y, avgCenter.Z)
+                end
+            end
+        end
+    end)
+
+    return basePos
 end
 
 function TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)

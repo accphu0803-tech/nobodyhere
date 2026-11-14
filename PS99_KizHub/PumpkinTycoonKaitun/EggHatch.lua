@@ -132,7 +132,6 @@ local EGG_AREAS = {
         eggName = "Hayride Hill Egg",
         displayName = "Hayride Hill",
         offset = Vector3.new(-200.72, 0.08, -53.77),
-        worldCFrame = CFrame.new(6338.77, 2007.58, 7799.28),
         btnId = "HayrideHill_Egg",
         attrName = "HayrideHill_Egg",
         unitCost = 4000,
@@ -189,11 +188,8 @@ function EggHatch.getBestUnlockedEgg()
             expectedPos = eggAttr.Position
         elseif typeof(eggAttr) == "Vector3" then
             expectedPos = eggAttr
-        elseif area.worldCFrame then
-            expectedPos = area.worldCFrame.Position
         elseif area.offset and plotPivot then
-            local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
-            expectedPos = pivotPos + area.offset
+            expectedPos = plotPivot:PointToWorldSpace(area.offset)
         end
 
         -- A. Quét trong CustomEggsCmds.All()
