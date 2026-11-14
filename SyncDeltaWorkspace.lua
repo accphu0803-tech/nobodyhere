@@ -41,6 +41,13 @@ local FILES = {
     "HalloweenKaitun/ZoneFarm.lua",
     "HalloweenKaitun/EggHatch.lua",
     "HalloweenKaitun/main.lua",
+
+    -- PumpkinTycoonKaitun
+    "PumpkinTycoonKaitun/Config.lua",
+    "PumpkinTycoonKaitun/TycoonFarm.lua",
+    "PumpkinTycoonKaitun/EggHatch.lua",
+    "PumpkinTycoonKaitun/TycoonMachines.lua",
+    "PumpkinTycoonKaitun/main.lua",
 }
 
 -- Helper tạo thư mục cha an toàn
