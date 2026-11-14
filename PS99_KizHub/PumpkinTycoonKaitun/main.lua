@@ -85,6 +85,53 @@ local state = {
     mailStatus = "Rảnh",
 }
 
+-- =========================================================================
+-- 2. HÀM KIỂM TRA TRẠNG THÁI SỰ KIỆN (IN-EVENT DETECTION)
+-- =========================================================================
+
+local function inEvent()
+    -- 1. Kiểm tra container active instance trong Workspace
+    local things = workspace:FindFirstChild("__THINGS")
+    local cont = things and things:FindFirstChild("__INSTANCE_CONTAINER")
+    local act = cont and cont:FindFirstChild("Active")
+    if act and act:FindFirstChild("PumpkinTycoon") ~= nil then
+        return true
+    end
+
+    -- 2. Kiểm tra ClientPlot của người chơi từ Island module
+    local okPlot, plotObj = pcall(function()
+        local islandCmds = require(ReplicatedStorage.Library.Client.PumpkinTycoonCmds.Island)
+        return islandCmds and islandCmds.Plot and islandCmds.Plot()
+    end)
+    if okPlot and plotObj ~= nil then
+        return true
+    end
+
+    -- 3. Kiểm tra tọa độ không gian (Y > 1750 và trong bán kính 4500 studs quanh Vector3.new(8000, 2000, 8000))
+    local p = Network.playerPos and Network.playerPos()
+    if p and p.Y > 1750 then
+        local dist = (p - Vector3.new(8000, 2000, 8000)).Magnitude
+        if dist < 4500 then
+            return true
+        end
+    end
+
+    -- 4. Kiểm tra InstanceId từ Save hoặc Instancing module
+    local s = Network.getSave and Network.getSave()
+    local inst = s and s.Instancing and s.Instancing.InstanceId
+    if inst == "PumpkinTycoon" then
+        return true
+    end
+    if Modules and Modules.G and Modules.G.Instancing and Network.isfn(Modules.G.Instancing, "GetId") then
+        local okId, curId = pcall(function() return Network.gval(Modules.G.Instancing.GetId) end)
+        if okId and curId == "PumpkinTycoon" then
+            return true
+        end
+    end
+
+    return false
+end
+
 -- Khởi tạo Dependencies dùng chung
 local sharedDeps = {
     Modules = Modules,
@@ -92,11 +139,7 @@ local sharedDeps = {
     Config = Config,
     K = K,
     Webhook = Webhook,
-    inEvent = function()
-        local s = Network.getSave()
-        local inst = s and s.Instancing and s.Instancing.InstanceId
-        return inst == K.INSTANCE_ID
-    end,
+    inEvent = inEvent,
     instanceModel = function()
         if Modules and Modules.G and Modules.G.Instancing and Network.isfn(Modules.G.Instancing, "GetModel") then
             local m = Network.gval(Modules.G.Instancing.GetModel)
@@ -105,7 +148,7 @@ local sharedDeps = {
         local things = workspace:FindFirstChild("__THINGS")
         local cont = things and things:FindFirstChild("__INSTANCE_CONTAINER")
         local act = cont and cont:FindFirstChild("Active")
-        return act and act:FindFirstChild(K.INSTANCE_ID)
+        return act and act:FindFirstChild(K.INSTANCE_ID or "PumpkinTycoon")
     end,
     petEuids = TycoonFarm.petEuids,
     DashboardGui = DashboardGui,
@@ -133,34 +176,64 @@ AntiAFK.installGodModeAntiAfk(Network.netFire, Config.AfkPulseInterval or 35)
 -- 3. ĐẢM BẢO NGƯỜI CHƠI ĐÃ VÀO INSTANCE PUMPKIN TYCOON
 -- =========================================================================
 
+local lastEnterAttempt = 0
+
 local function ensureInPumpkinTycoon()
-    local s = Network.getSave()
-    local currentInst = s and s.Instancing and s.Instancing.InstanceId
-    if currentInst == K.INSTANCE_ID and TycoonFarm.getPlot() then
+    if inEvent() then
         return true
     end
+
+    local now = os.clock()
+    if now - lastEnterAttempt < 25 then
+        return false
+    end
+    lastEnterAttempt = now
 
     print("[KizHub Tycoon] Đang tiến vào thế giới Pumpkin Tycoon...")
     pcall(function()
         if Modules and Modules.G and Modules.G.Instancing and Network.isfn(Modules.G.Instancing, "Enter") then
-            Network.gcall(Modules.G.Instancing.Enter, K.INSTANCE_ID)
+            Network.gcall(Modules.G.Instancing.Enter, K.INSTANCE_ID or "PumpkinTycoon")
         else
-            Network.netInvoke("Instancing_PlayerEnterInstance", K.INSTANCE_ID)
+            Network.netInvoke("Instancing_PlayerEnterInstance", K.INSTANCE_ID or "PumpkinTycoon")
         end
     end)
 
     local t0 = os.clock()
     while state.alive and os.clock() - t0 < 15 do
-        if TycoonFarm.getPlot() then
+        if inEvent() then
             task.wait(1.5)
+            pcall(function()
+                local islandCmds = require(ReplicatedStorage.Library.Client.PumpkinTycoonCmds.Island)
+                if islandCmds and type(islandCmds.GetTeleport) == "function" then
+                    local teleCF = islandCmds.GetTeleport()
+                    if teleCF and Network.teleportTo then
+                        Network.teleportTo(teleCF)
+                    end
+                end
+            end)
             -- Đặt cấu hình AutoBreak về 0 ngay khi vào đảo
-            TycoonFarm.ensureAutoBreakZero()
+            if TycoonFarm and type(TycoonFarm.ensureAutoBreakZero) == "function" then
+                TycoonFarm.ensureAutoBreakZero()
+            end
             return true
         end
         task.wait(0.5)
     end
 
-    return TycoonFarm.getPlot() ~= nil
+    if inEvent() then
+        pcall(function()
+            local islandCmds = require(ReplicatedStorage.Library.Client.PumpkinTycoonCmds.Island)
+            if islandCmds and type(islandCmds.GetTeleport) == "function" then
+                local teleCF = islandCmds.GetTeleport()
+                if teleCF and Network.teleportTo then
+                    Network.teleportTo(teleCF)
+                end
+            end
+        end)
+        return true
+    end
+
+    return false
 end
 
 -- =========================================================================
