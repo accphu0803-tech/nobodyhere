@@ -37,7 +37,11 @@ local function import(relativePath)
     end
 
     local url = GITHUB_REPO_BASE .. relativePath
-    local okG, webContent = pcall(function() return game:HttpGet(url) end)
+    local cacheBustUrl = url .. "?t=" .. tostring(os.time())
+    local okG, webContent = pcall(function() return game:HttpGet(cacheBustUrl) end)
+    if not okG or not webContent or #webContent == 0 then
+        okG, webContent = pcall(function() return game:HttpGet(url) end)
+    end
     if okG and webContent and #webContent > 0 then
         local fn, err = loadstring(webContent, "=" .. relativePath)
         if fn then return fn() else error("[KizHub Import] Lỗi nạp online " .. url .. ": " .. tostring(err)) end
