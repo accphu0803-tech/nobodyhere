@@ -250,6 +250,7 @@ end
 -- =========================================================================
 
 local ui = DashboardGui.create({
+    Mode = "Tycoon",
     BadgeTitle = "🎃 Kiz Hub | Pumpkin Patch Tycoon",
     OnClose = function()
         state.alive = false

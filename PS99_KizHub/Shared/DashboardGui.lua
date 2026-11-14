@@ -316,8 +316,29 @@ function DashboardGui.create(config)
     end
 
     local isHalloween = (config and (config.Mode == "Halloween" or (config.BadgeTitle and string.find(config.BadgeTitle, "Halloween")))) == true
+    local isTycoon = (config and (config.Mode == "Tycoon" or (config.BadgeTitle and string.find(config.BadgeTitle, "Tycoon")))) == true
 
-    if isHalloween then
+    if isTycoon then
+        -- Dòng 1: Big Pumpkin / AutoFarm / Movement (Tuyệt đối không hiện ⭐ Sao trong Tycoon)
+        local CombineLabel = createInfoLine("CombineLabel", "🎃 Big Pumpkin: Không • AutoFarm: BẬT", 22, Color3.fromRGB(251, 146, 60))
+        uiElements.CombineLabel = CombineLabel
+        uiElements.StarsLabel = CombineLabel
+
+        -- Dòng 2: Patch Coins / Pumpkin Tokens
+        local CoinsLabel = createInfoLine("CoinsLabel", "Patch Coins: 0 (+0) • Pumpkin Tokens: 0", 42, Color3.fromRGB(203, 213, 225))
+        uiElements.CoinsLabel = CoinsLabel
+        uiElements.TotalsLabel = CoinsLabel
+
+        -- Dòng 3: Hatched / Flannel Gifts / Merchant / Mail
+        local StatsLabel = createInfoLine("StatsLabel", "Hatched: 0 • Flannel Gifts: 0 • Merchant: Rảnh • Mail: Rảnh", 62, Color3.fromRGB(148, 163, 184))
+        uiElements.MailLabel = StatsLabel
+        uiElements.RankSubStats = StatsLabel
+
+        -- Dòng 4: Doing / Hành động hiện tại
+        local ActionLabel = createInfoLine("ActionLabel", "Doing: Đứng bãi farm & mở trứng...", 82, Color3.fromRGB(56, 189, 248))
+        uiElements.ActionLabel = ActionLabel
+        uiElements.DetailBox = ActionLabel
+    elseif isHalloween then
         -- Dòng 1: Combine Egg / Nguyên liệu còn thiếu (Dành riêng cho Kaitun Halloween)
         local CombineLabel = createInfoLine("CombineLabel", "🔮 Combine Egg: Đang quét nguyên liệu...", 22, Color3.fromRGB(216, 180, 254))
         uiElements.CombineLabel = CombineLabel
@@ -383,12 +404,12 @@ function DashboardGui.create(config)
         Instance.new("UICorner", qRow).CornerRadius = UDim.new(0, 6)
 
         local qStars = Instance.new("TextLabel", qRow)
-        qStars.Text = "[⭐ 1]"
+        qStars.Text = isTycoon and "" or "[⭐ 1]"
         qStars.Font = Enum.Font.GothamBold
         qStars.TextSize = 10
-        qStars.TextColor3 = Color3.fromRGB(255, 200, 50)
+        qStars.TextColor3 = isTycoon and Color3.fromRGB(56, 189, 248) or Color3.fromRGB(255, 200, 50)
         qStars.Position = UDim2.new(0, 8, 0, 2)
-        qStars.Size = UDim2.new(0, 38, 0, 16)
+        qStars.Size = UDim2.new(0, isTycoon and 65 or 38, 0, 16)
         qStars.TextXAlignment = Enum.TextXAlignment.Left
         qStars.BackgroundTransparency = 1
         qStars.ZIndex = 5
@@ -398,8 +419,8 @@ function DashboardGui.create(config)
         qName.Font = Enum.Font.GothamSemibold
         qName.TextSize = 11
         qName.TextColor3 = Color3.fromRGB(224, 231, 255)
-        qName.Position = UDim2.new(0, 48, 0, 2)
-        qName.Size = UDim2.new(1, -160, 0, 16)
+        qName.Position = UDim2.new(0, isTycoon and 75 or 48, 0, 2)
+        qName.Size = UDim2.new(1, isTycoon and -185 or -160, 0, 16)
         qName.TextXAlignment = Enum.TextXAlignment.Left
         qName.TextTruncate = Enum.TextTruncate.AtEnd
         qName.BackgroundTransparency = 1
