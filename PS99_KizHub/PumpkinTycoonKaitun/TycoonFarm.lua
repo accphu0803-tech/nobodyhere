@@ -201,7 +201,8 @@ local FARM_AREAS = {
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
-        offset = Vector3.new(-199.02, 0.08, -50.96),
+        offset = Vector3.new(-200.72, 0.08, -53.77),
+        worldCFrame = CFrame.new(6338.77, 2007.58, 7799.28),
         pathBtn = "Path_3",
         zoneBtn = "HayrideHill_Zone",
         eggAttr = "HayrideHill_Egg",
@@ -308,8 +309,11 @@ function TycoonFarm.getActiveAreaIndex()
                 eggPos = eggAttr
             end
         end
-        if not eggPos and area.offset and plotPivot then
-            eggPos = plotPivot:PointToWorldSpace(area.offset)
+        if not eggPos and area.worldCFrame then
+            eggPos = area.worldCFrame.Position
+        elseif not eggPos and area.offset and plotPivot then
+            local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
+            eggPos = pivotPos + area.offset
         end
 
         if eggPos and customEggs then
@@ -321,16 +325,20 @@ function TycoonFarm.getActiveAreaIndex()
         end
     end
 
-    -- D. Fallback nếu nhân vật đang đứng gần offset của bãi nào (trong phạm vi 100 studs)
+    -- D. Fallback nếu nhân vật đang đứng gần vị trí của bãi nào (trong phạm vi 100 studs)
     local char, hrp = getCharacterParts()
     if hrp and plotPivot then
         for zoneIdx = 5, 2, -1 do
             local area = FARM_AREAS[zoneIdx]
-            if area.offset then
-                local worldOffset = plotPivot:PointToWorldSpace(area.offset)
-                if (hrp.Position - worldOffset).Magnitude <= 100 then
-                    return zoneIdx
-                end
+            local targetPos = nil
+            if area.worldCFrame then
+                targetPos = area.worldCFrame.Position
+            elseif area.offset then
+                local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
+                targetPos = pivotPos + area.offset
+            end
+            if targetPos and (hrp.Position - targetPos).Magnitude <= 100 then
+                return zoneIdx
             end
         end
     end
@@ -343,12 +351,29 @@ function TycoonFarm.getSweetPos()
     local areaData = FARM_AREAS[areaIdx] or FARM_AREAS[1]
 
     local plotPivot = TycoonFarm.getPlotPivot()
-    if areaData.offset and plotPivot then
-        return plotPivot:PointToWorldSpace(areaData.offset)
+    local plotModel = TycoonFarm.getPlotModel()
+
+    -- 1. Ưu tiên cao nhất: Tọa độ World CFrame chuẩn xác tuyệt đối (nếu cùng plot/server)
+    if areaData.worldCFrame then
+        if plotPivot then
+            local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
+            local dist = (pivotPos - areaData.worldCFrame.Position).Magnitude
+            if dist < 350 then
+                return areaData.worldCFrame.Position
+            end
+        else
+            return areaData.worldCFrame.Position
+        end
     end
 
-    local plotModel = TycoonFarm.getPlotModel()
-    if plotModel then
+    -- 2. Tọa độ theo offset thế giới thẳng (pivotPos + offset, không bị xoay ma trận)
+    if areaData.offset and plotPivot then
+        local pivotPos = typeof(plotPivot) == "CFrame" and plotPivot.Position or plotPivot
+        return pivotPos + areaData.offset
+    end
+
+    -- 3. Fallback theo Attribute CFrame trên PlotModel
+    if plotModel and areaData.eggAttr then
         local eggAttr = plotModel:GetAttribute(areaData.eggAttr)
         if typeof(eggAttr) == "CFrame" then
             return eggAttr.Position + Vector3.new(0, 2.5, 8)
@@ -545,46 +570,8 @@ function TycoonFarm.breakBigPumpkinTick(state)
     if state and state.excursion and state.excursion:find("Bí Ngô") then
         state.excursion = nil
     end
-    if not Config.BreakBigPumpkins then return false end
-    local bp = TycoonFarm.findActiveBigPumpkin()
-    if not bp then
-        if state and state.excursion and state.excursion:find("Bí Ngô") then
-            state.excursion = nil
-            local sweetPos = TycoonFarm.getSweetPos()
-            if sweetPos then
-                TycoonFarm.moveTo(sweetPos)
-            end
-        end
-        return false
-    end
-
-    state.excursion = "Phá Bí Ngô Khổng Lồ (Bậc " .. tostring(bp.rung) .. ")"
-
-    -- Gửi toàn bộ Pet trang bị vào tấn công Bí Ngô Khổng Lồ (PlayerPet -> SetAnchored, SetTarget)
-    local playerPets = getPlayerPets()
-    for _, pet in ipairs(playerPets) do
-        if pet.SetAnchored then pet:SetAnchored(false) end
-        if pet.SetTarget and bp.model then pet:SetTarget(bp.model) end
-    end
-
-    local pets = TycoonFarm.petEuids()
-    if #pets > 0 then
-        local targetBulk = {}
-        for _, uid in ipairs(pets) do
-            targetBulk[uid] = tostring(bp.uid)
-        end
-        pcall(function()
-            Network.netFire("Breakables_JoinPetBulk", targetBulk)
-            Network.netFire("Pets_SetTargetBulk", targetBulk)
-        end)
-    end
-
-    -- Đánh tay từ xa (Player Deal Damage)
-    pcall(function()
-        Network.netFire("Breakables_PlayerDealDamage", tonumber(bp.uid) or bp.uid)
-    end)
-
-    return true
+    -- Cơ chế game tự động cho pet đánh bí khổng lồ, script không can thiệp để tránh làm lệch vị trí farm
+    return false
 end
 
 -- =========================================================================
@@ -592,6 +579,10 @@ end
 -- =========================================================================
 
 function TycoonFarm.farmBestPatchTick(state)
+    if state and state.excursion and state.excursion:find("Bí Ngô") then
+        state.excursion = nil
+    end
+
     local plot = TycoonFarm.getPlot()
     if not plot then return end
 

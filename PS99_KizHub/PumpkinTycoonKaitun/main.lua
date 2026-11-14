@@ -307,7 +307,11 @@ task.spawn(function()
                 ui.MailLabel.Text = string.format("Hatched: %d • Flannel Gifts: %d • Merchant: %s • Mail: %s", state.totalEggsHatched or 0, mach.flannelGiftCount or 0, mach.merchantStatus or "Rảnh", state.mailStatus or "Rảnh")
             end
             if ui.DetailBox then
-                ui.DetailBox.Text = "Doing: " .. tostring(state.excursion or state.hatchStatus or "Đứng bãi farm & mở trứng...")
+                if state.excursion and state.excursion:find("Bí Ngô") then
+                    state.excursion = nil
+                end
+                local currentTask = state.excursion or state.hatchStatus or string.format("Đứng bãi farm %s & mở trứng...", areaName)
+                ui.DetailBox.Text = "Doing: " .. tostring(currentTask)
             end
 
             -- Cập nhật 4 Hàng Tiến Độ (QuestRows)
