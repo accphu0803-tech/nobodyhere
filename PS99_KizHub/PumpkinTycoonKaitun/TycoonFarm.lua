@@ -26,6 +26,7 @@ local PTButtons = nil
 local ButtonsCmds = nil
 local BreakableFrontend = nil
 local AutoFarmCmds = nil
+local PlayerPet = nil
 
 local function safeRequire(pathTbl)
     local cur = ReplicatedStorage
@@ -52,6 +53,9 @@ local function initGameLibs()
     end
     if not AutoFarmCmds then
         AutoFarmCmds = safeRequire({ "Library", "Client", "AutoFarmCmds" })
+    end
+    if not PlayerPet then
+        PlayerPet = safeRequire({ "Library", "Client", "PlayerPet" })
     end
 end
 
@@ -183,14 +187,43 @@ end
 -- 3. QUẢN LÝ QUY TẮC AUTOBREAK, PEDESTAL VÀ AUTO FARM SỰ KIỆN
 -- =========================================================================
 
-function TycoonFarm.ensureAutoFarmEnabled()
+function TycoonFarm.getSweetPos()
+    local plot = TycoonFarm.getPlot()
+    local plotModel = TycoonFarm.getPlotModel()
+    if plot then
+        local okCF, plotCF = pcall(function() return plot:GetCFrame() end)
+        if okCF and plotCF then
+            return plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
+        end
+    end
+    if plotModel then
+        local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg")
+        if typeof(eggAttr) == "CFrame" then
+            return eggAttr.Position + Vector3.new(0, 2, 12)
+        elseif typeof(eggAttr) == "Vector3" then
+            return eggAttr + Vector3.new(0, 2, 12)
+        end
+    end
+    return nil
+end
+
+function TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)
     pcall(function()
         if not AutoFarmCmds then
             AutoFarmCmds = safeRequire({ "Library", "Client", "AutoFarmCmds" })
         end
-        if AutoFarmCmds and type(AutoFarmCmds.IsEnabled) == "function" and type(AutoFarmCmds.Enable) == "function" then
+        if AutoFarmCmds and type(AutoFarmCmds.IsEnabled) == "function" then
             if not AutoFarmCmds.IsEnabled() then
-                AutoFarmCmds.Enable()
+                if type(AutoFarmCmds.Enable) == "function" then
+                    AutoFarmCmds.Enable()
+                end
+                Network.netInvoke("AutoFarm_Enable", true)
+                if sweetPos then
+                    Network.netFire("AutoFarm_LogPosition", sweetPos)
+                end
+            end
+            if state then
+                state.autoFarmActive = AutoFarmCmds.IsEnabled()
             end
         end
     end)
@@ -200,7 +233,8 @@ function TycoonFarm.ensureAutoBreakZero()
     local plot = TycoonFarm.getPlot()
     if not plot then return end
 
-    TycoonFarm.ensureAutoFarmEnabled()
+    local sweetPos = TycoonFarm.getSweetPos()
+    TycoonFarm.ensureAutoFarmEnabled(nil, sweetPos)
 
     pcall(function()
         local autoBreak = plot:Save("AutoBreak")
@@ -225,76 +259,94 @@ end
 -- 4. TRUY TÌM VÀ PHÁ BÍ NGÔ KHỔNG LỒ (BIG PUMPKIN) ƯU TIÊN CAO NHẤT
 -- =========================================================================
 
+local function getBrkData(k, v)
+    local brkObj = (type(v) == "table" and v) or (type(k) == "table" and k) or {}
+    local uid = brkObj.uid or (type(k) == "string" and k) or (type(v) == "string" and v) or (brkObj.model and brkObj.model.Name)
+    local model = brkObj.model or (typeof(v) == "Instance" and v) or (typeof(k) == "Instance" and k)
+    local parentID = brkObj.parentID or (model and model:GetAttribute("ParentID"))
+    local pos = brkObj.position or (model and model:GetPivot().Position) or (brkObj.GetPosition and brkObj:GetPosition())
+    local clientAttrs = brkObj.clientAttributes or (model and model:GetAttributes()) or {}
+    return {
+        uid = uid,
+        model = model,
+        parentID = parentID,
+        position = pos,
+        clientAttributes = clientAttrs,
+    }
+end
+
+local function getPlayerPets()
+    local pets = {}
+    pcall(function()
+        local pp = (Modules and Modules.G and Modules.G.PlayerPet) or PlayerPet or safeRequire({ "Library", "Client", "PlayerPet" })
+        if pp and type(pp.GetByPlayer) == "function" then
+            local pList = pp.GetByPlayer(LocalPlayer)
+            if type(pList) == "table" then
+                for _, p in pairs(pList) do
+                    table.insert(pets, p)
+                end
+            end
+        end
+    end)
+    return pets
+end
+
 function TycoonFarm.findActiveBigPumpkin()
     local plot = TycoonFarm.getPlot()
     if not plot then return nil end
 
+    initGameLibs()
     local plotId = plot:GetId()
-    local plotModel = TycoonFarm.getPlotModel()
+    local sweetPos = TycoonFarm.getSweetPos()
     local bestPumpkin = nil
     local maxRung = -1
 
-    local function inspectBreakable(chest, uid)
-        local cf = chest:GetPivot()
-        local pos = cf.Position
-        local clientAttrs = chest:GetAttributes()
+    local function checkChest(brk)
+        if not brk or not brk.position then return end
+        local isTycoon = (brk.parentID == "PumpkinTycoon") or (brk.model and brk.model:GetAttribute("ParentID") == "PumpkinTycoon")
+        if not isTycoon then return end
 
-        local isMyPlot = (clientAttrs.Plot == plotId)
-        local pedIndex = clientAttrs.PumpkinPedestal or clientAttrs.Pedestal
-
-        if not isMyPlot and plotModel then
-            -- Fallback kiểm tra khoảng cách với các bệ Pedestal trên đảo của mình
-            for i = 1, 8 do
-                local pedPart = plotModel:FindFirstChild("Pedestal_" .. i, true)
-                local spawnPart = pedPart and (pedPart:FindFirstChild("PumpkinSpawn") or pedPart:FindFirstChild("Spawn"))
-                if spawnPart and (spawnPart.Position - pos).Magnitude < 25 then
-                    isMyPlot = true
-                    pedIndex = i
-                    break
-                end
-            end
-        end
+        local brkPlot = brk.clientAttributes.Plot or (brk.model and brk.model:GetAttribute("Plot"))
+        local distSweet = sweetPos and (brk.position - sweetPos).Magnitude or 9999
+        local isMyPlot = (brkPlot == plotId) or (distSweet < 350)
 
         if isMyPlot then
-            local rung = tonumber(clientAttrs.Rung) or 1
-            local petName = clientAttrs.PetName or chest.Name
-            if K.ROSTER_RUNG[petName] then
+            local rung = tonumber(brk.clientAttributes.Rung) or (brk.model and tonumber(brk.model:GetAttribute("Rung"))) or 1
+            local petName = brk.clientAttributes.PetName or (brk.model and brk.model:GetAttribute("PetName")) or (brk.model and brk.model.Name)
+            if K and K.ROSTER_RUNG and petName and K.ROSTER_RUNG[petName] then
                 rung = math.max(rung, K.ROSTER_RUNG[petName])
             end
+            local pedIndex = brk.clientAttributes.PumpkinPedestal or brk.clientAttributes.Pedestal or 1
 
             if rung > maxRung then
                 maxRung = rung
                 bestPumpkin = {
-                    uid = uid or chest.Name,
-                    model = chest,
-                    pos = pos,
-                    pedestalIndex = pedIndex or 1,
+                    uid = brk.uid,
+                    model = brk.model,
+                    pos = brk.position,
+                    pedestalIndex = pedIndex,
                     rung = rung,
                 }
             end
         end
     end
 
-    -- 1. Tìm qua BreakableFrontend (Thư viện Client PS99)
     if BreakableFrontend and type(BreakableFrontend.AllByInstanceAndClass) == "function" then
         local ok, chests = pcall(BreakableFrontend.AllByInstanceAndClass, "Chest")
         if ok and type(chests) == "table" then
-            for uid, chest in pairs(chests) do
-                if typeof(chest) == "Instance" then
-                    inspectBreakable(chest, uid)
-                end
+            for k, v in pairs(chests) do
+                checkChest(getBrkData(k, v))
             end
         end
     end
 
-    -- 2. Fallback quét thư mục __THINGS.Breakables
     if not bestPumpkin then
         local things = workspace:FindFirstChild("__THINGS")
         local breakables = things and things:FindFirstChild("Breakables")
         if breakables then
             for _, child in ipairs(breakables:GetChildren()) do
                 if child:IsA("Model") and (child:GetAttribute("Chest") or child.Name:find("Chest") or child:GetAttribute("PumpkinPedestal")) then
-                    inspectBreakable(child, child.Name)
+                    checkChest(getBrkData(child.Name, child))
                 end
             end
         end
@@ -343,7 +395,7 @@ function TycoonFarm.breakBigPumpkinTick(state)
         return false
     end
 
-    state.excursion = string.format("Phá Bí Ngô Khổng Lồ (Bệ #%d - Bậc %d)", bp.pedestalIndex, bp.rung)
+    state.excursion = "Phá Bí Ngô Khổng Lồ (Bậc " .. tostring(bp.rung) .. ")"
 
     -- Di chuyển lại gần Bí Ngô nếu khoảng cách > 15 studs
     local char, hrp = getCharacterParts()
@@ -351,12 +403,18 @@ function TycoonFarm.breakBigPumpkinTick(state)
         TycoonFarm.moveTo(CFrame.new(bp.pos + Vector3.new(0, 3, 8), bp.pos))
     end
 
-    -- Gửi toàn bộ Pet vào tấn công Bí Ngô Khổng Lồ
+    -- Gửi toàn bộ Pet trang bị vào tấn công Bí Ngô Khổng Lồ (PlayerPet.GetByPlayer -> SetAnchored, SetTarget)
+    local playerPets = getPlayerPets()
+    for _, pet in ipairs(playerPets) do
+        if pet.SetAnchored then pet:SetAnchored(false) end
+        if pet.SetTarget and bp.model then pet:SetTarget(bp.model) end
+    end
+
     local pets = TycoonFarm.petEuids()
     if #pets > 0 then
         local targetBulk = {}
         for _, uid in ipairs(pets) do
-            targetBulk[uid] = bp.uid
+            targetBulk[uid] = tostring(bp.uid)
         end
         pcall(function()
             Network.netFire("Breakables_JoinPetBulk", targetBulk)
@@ -366,128 +424,102 @@ function TycoonFarm.breakBigPumpkinTick(state)
 
     -- Đánh tay (Player Deal Damage)
     pcall(function()
-        Network.netFire("Breakables_PlayerDealDamage", bp.uid)
+        Network.netFire("Breakables_PlayerDealDamage", tonumber(bp.uid) or bp.uid)
     end)
 
     return true
 end
 
 -- =========================================================================
--- 5. FARM BÃI PATCH CỦA KHU VỰC CAO NHẤT (BEST ZONE SLAB)
+-- 5. FARM BÃI PATCH ĐẢO ĐƠN NHẤT (SINGLE ISLAND SWEET SPOT)
 -- =========================================================================
 
 function TycoonFarm.farmBestPatchTick(state)
     local plot = TycoonFarm.getPlot()
-    local plotModel = TycoonFarm.getPlotModel()
-    if not plot or not plotModel then return end
+    if not plot then return end
 
     initGameLibs()
-    TycoonFarm.ensureAutoFarmEnabled()
+    local sweetPos = TycoonFarm.getSweetPos()
+    if not sweetPos then return end
 
-    local buttonsState = plot:Save("Buttons") or {}
-    local bestZone = 1
-    if PTButtons and type(PTButtons.FarmZone) == "function" then
-        bestZone = PTButtons.FarmZone(buttonsState, 5) or 1
+    -- Kích hoạt Auto Farm miễn phí của event
+    TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)
+
+    -- Nếu không có excursion (không đi phá bí ngô ở bệ xa) và cách sweetPos > 14 studs -> Di chuyển về sweetPos
+    local char, hrp = getCharacterParts()
+    if state and state.excursion == nil and hrp and (hrp.Position - sweetPos).Magnitude > 14 then
+        TycoonFarm.moveTo(sweetPos)
     end
 
-    local zoneData = K.ZONES[bestZone]
-    if not zoneData then return end
-
-    -- 1. Tìm section của zone trong plotModel.Sections
-    local secFolder = plotModel:FindFirstChild("Sections")
-    local zoneSection = nil
-    if secFolder then
-        for _, ch in ipairs(secFolder:GetChildren()) do
-            local attrSec = ch:GetAttribute("TycoonSection")
-            if (attrSec and zoneData.Section and attrSec == zoneData.Section)
-                or (zoneData.DisplayName and ch.Name:find(zoneData.DisplayName, 1, true)) then
-                zoneSection = ch
-                break
+    -- Quét quặng Normal trên đảo từ BreakableFrontend (brk.parentID == "PumpkinTycoon" và cự ly <= 65)
+    local targets = {}
+    if BreakableFrontend and type(BreakableFrontend.AllByInstanceAndClass) == "function" then
+        local ok, normals = pcall(BreakableFrontend.AllByInstanceAndClass, "Normal")
+        if ok and type(normals) == "table" then
+            for k, v in pairs(normals) do
+                local brk = getBrkData(k, v)
+                local isTycoon = (brk.parentID == "PumpkinTycoon") or (brk.model and brk.model:GetAttribute("ParentID") == "PumpkinTycoon")
+                if isTycoon and brk.position and (brk.position - sweetPos).Magnitude <= 65 then
+                    table.insert(targets, brk)
+                end
             end
         end
     end
 
-    -- 2. Xác định tâm section (section center)
-    local secCenter = nil
-    if zoneSection then
-        local slab = zoneSection:FindFirstChild("ZoneSlab", true) or zoneSection:FindFirstChild("Slab", true)
-        if slab and slab:IsA("BasePart") then
-            secCenter = slab.Position
-        else
-            secCenter = zoneSection:GetPivot().Position
-        end
-    end
-
-    if not secCenter and PTButtons and type(PTButtons.ZoneSlab) == "function" then
-        local slab = PTButtons.ZoneSlab(plotModel, bestZone)
-        if slab and slab:IsA("BasePart") then
-            secCenter = slab.Position
-        end
-    end
-
-    -- 3. Xác định vị trí nút Trứng từ plotModel:GetAttribute(zoneData.EggBtn)
-    local eggAttr = zoneData.EggBtn and plotModel:GetAttribute(zoneData.EggBtn)
-    local eggPos = nil
-    if typeof(eggAttr) == "CFrame" then
-        eggPos = eggAttr.Position
-    elseif typeof(eggAttr) == "Vector3" then
-        eggPos = eggAttr
-    end
-
-    -- 4. Tính toán sweet spot
-    local sweetSpot = nil
-    local okCF, plotCF = pcall(function() return plot:GetCFrame() end)
-    if bestZone == 1 and okCF and plotCF then
-        sweetSpot = plotCF:PointToWorldSpace(Vector3.new(181.27, 3.86, 124.00))
-    elseif eggPos and secCenter then
-        local dir = (secCenter - eggPos)
-        if dir.Magnitude > 0 then
-            sweetSpot = eggPos + dir.Unit * math.min(25, dir.Magnitude * 0.5)
-        else
-            sweetSpot = eggPos
-        end
-    elseif secCenter then
-        sweetSpot = secCenter + Vector3.new(0, 3, 0)
-    elseif eggPos then
-        sweetSpot = eggPos + Vector3.new(0, 3, 0)
-    end
-
-    if not sweetSpot then return end
-
-    local char, hrp = getCharacterParts()
-    if hrp and (hrp.Position - sweetSpot).Magnitude > 6 then
-        TycoonFarm.moveTo(sweetSpot)
-    end
-
-    -- Quét quặng trong bán kính 55 studs và điều phối pet
-    local pets = TycoonFarm.petEuids()
-    if #pets > 0 then
+    -- Fallback quét thư mục __THINGS.Breakables
+    if #targets == 0 then
         local things = workspace:FindFirstChild("__THINGS")
         local breakables = things and things:FindFirstChild("Breakables")
         if breakables then
-            local targets = {}
             for _, b in ipairs(breakables:GetChildren()) do
                 if b:IsA("Model") then
                     local bPos = b:GetPivot().Position
-                    local distSweet = (bPos - sweetSpot).Magnitude
-                    local distPlayer = hrp and (bPos - hrp.Position).Magnitude or 999
-                    if distSweet <= 55 or distPlayer <= 55 then
-                        table.insert(targets, b.Name)
+                    if (bPos - sweetPos).Magnitude <= 65 then
+                        table.insert(targets, {
+                            uid = b.Name,
+                            model = b,
+                            position = bPos,
+                        })
                     end
                 end
             end
-            if #targets > 0 then
-                local joinMap = {}
-                for idx, pUid in ipairs(pets) do
-                    local tUid = targets[((idx - 1) % #targets) + 1]
-                    joinMap[pUid] = tUid
-                end
-                pcall(function()
-                    Network.netFire("Breakables_JoinPetBulk", joinMap)
-                end)
-            end
         end
     end
+
+    -- Điều phối pet: pet:SetTarget(brk.model), Breakables_JoinPetBulk, Breakables_PlayerDealDamage
+    if #targets > 0 then
+        local playerPets = getPlayerPets()
+        local petUids = TycoonFarm.petEuids()
+
+        if #playerPets > 0 then
+            for idx, pet in ipairs(playerPets) do
+                local t = targets[((idx - 1) % #targets) + 1]
+                if pet.SetAnchored then pet:SetAnchored(false) end
+                if pet.SetTarget and t.model then pet:SetTarget(t.model) end
+            end
+        end
+
+        if #petUids > 0 then
+            local joinMap = {}
+            for idx, pUid in ipairs(petUids) do
+                local t = targets[((idx - 1) % #targets) + 1]
+                joinMap[pUid] = tostring(t.uid)
+            end
+            pcall(function()
+                Network.netFire("Breakables_JoinPetBulk", joinMap)
+            end)
+        end
+
+        local primary = targets[1]
+        if primary and primary.uid then
+            pcall(function()
+                Network.netFire("Breakables_PlayerDealDamage", tonumber(primary.uid) or primary.uid)
+            end)
+        end
+    end
+
+    TycoonFarm.collectOrbsTick()
+end
 
     TycoonFarm.collectOrbsTick()
 end
@@ -609,15 +641,14 @@ end
 
 function TycoonFarm.getTycoonProgress()
     local plot = TycoonFarm.getPlot()
-    local plotModel = TycoonFarm.getPlotModel()
     if not plot then
         return {
             ownedButtons = 0,
             totalButtons = 0,
             percent = 0,
             activeBigPumpkins = 0,
+            activeBigPumpkinRung = 0,
             unlockedPedestals = 0,
-            bestZone = 1,
             completed = false,
         }
     end
@@ -630,11 +661,6 @@ function TycoonFarm.getTycoonProgress()
     if PTButtons and type(PTButtons.Progress) == "function" then
         ownedCount, totalCount, frac = PTButtons.Progress(buttonsState, 1)
         isCompleted = PTButtons.Completed(buttonsState)
-    end
-
-    local bestZone = 1
-    if PTButtons and type(PTButtons.FarmZone) == "function" then
-        bestZone = PTButtons.FarmZone(buttonsState, 5) or 1
     end
 
     local unlockedPedestals = 0
@@ -658,7 +684,6 @@ function TycoonFarm.getTycoonProgress()
         activeBigPumpkins = bigPumpkin and 1 or 0,
         activeBigPumpkinRung = bigPumpkin and bigPumpkin.rung or 0,
         unlockedPedestals = unlockedPedestals,
-        bestZone = bestZone,
         completed = isCompleted,
     }
 end

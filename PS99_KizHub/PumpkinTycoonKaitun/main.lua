@@ -78,11 +78,11 @@ local state = {
     startTime = os.clock(),
     sessionStartCoins = 0,
     totalEggsHatched = 0,
-    currentZoneNumber = 1,
     currentEggName = "Cocoa Cabin Egg",
     excursion = nil,
     daycareStatus = "Chờ",
     mailStatus = "Rảnh",
+    autoFarmActive = false,
 }
 
 -- =========================================================================
@@ -264,29 +264,31 @@ task.spawn(function()
             if state.sessionStartCoins == 0 and coins > 0 then
                 state.sessionStartCoins = coins
             end
-            local earnedCoins = math.max(0, coins - state.sessionStartCoins)
+            local deltaCoins = math.max(0, coins - state.sessionStartCoins)
 
             -- Cập nhật Header
             if ui.UptimeLabel then
                 ui.UptimeLabel.Text = string.format("Uptime: %02d:%02d:%02d", hrs, mins, secs)
             end
             if ui.ZoneLabel then
-                local zoneData = K.ZONES[prog.bestZone or 1]
-                ui.ZoneLabel.Text = string.format("Zone %d of 5 • %s", prog.bestZone or 1, zoneData and zoneData.DisplayName or "Cocoa Cabin")
-            end
-            if ui.CoinsLabel then
-                ui.CoinsLabel.Text = string.format("Patch Coins: %s (+%s) | Tokens: %s", Network.shorten(coins), Network.shorten(earnedCoins), Network.shorten(tokens))
+                ui.ZoneLabel.Text = string.format("Pumpkin Tycoon Island • Xây đảo: %d/%d (%.0f%%) • %d hatched", prog.ownedButtons, prog.totalButtons, prog.percent * 100, state.totalEggsHatched or 0)
             end
             if ui.CombineLabel then
-                ui.CombineLabel.Text = string.format("Hatched: %d | Big Pumpkins: %d", state.totalEggsHatched, prog.activeBigPumpkins)
+                ui.CombineLabel.Text = string.format("🎃 Big Pumpkin: %s • AutoFarm: %s • Move: %s", prog.activeBigPumpkins > 0 and ("CÓ (Bậc " .. (prog.activeBigPumpkinRung or 1) .. ")") or "Không", state.autoFarmActive and "BẬT" or "TẮT", Config.MovementMode or "Rage")
+            end
+            if ui.CoinsLabel then
+                ui.CoinsLabel.Text = string.format("Patch Coins: %s (+%s) • Pumpkin Tokens: %s", Network.shorten(coins), Network.shorten(deltaCoins), Network.shorten(tokens))
             end
             if ui.MailLabel then
-                ui.MailLabel.Text = string.format("Doing: %s", state.excursion or "Cày quặng bãi cao nhất & Mua nút...")
+                ui.MailLabel.Text = string.format("Hatched: %d • Flannel Gifts: %d • Merchant: %s • Mail: %s", state.totalEggsHatched or 0, mach.flannelGiftCount or 0, mach.merchantStatus or "Rảnh", state.mailStatus or "Rảnh")
+            end
+            if ui.DetailBox then
+                ui.DetailBox.Text = "Doing: " .. tostring(state.excursion or "Đứng bãi farm & mở trứng liên tục...")
             end
 
             -- Cập nhật 4 Hàng Tiến Độ (QuestRows)
             if ui.QuestRows then
-                -- Hàng 1: Tiến độ xây đảo (Island Buttons & Reward)
+                -- Hàng 1: [🏝️ Đảo] Tiến độ xây đảo (ownedButtons / totalButtons + trạng thái nhận thưởng 100%)
                 local r1 = ui.QuestRows[1]
                 if r1 then
                     r1.Row.Visible = true
@@ -300,43 +302,46 @@ task.spawn(function()
                     r1.BarFill.BackgroundColor3 = isDone and Color3.fromRGB(52, 211, 153) or Color3.fromRGB(56, 189, 248)
                 end
 
-                -- Hàng 2: Bí Ngô Khổng Lồ & Bệ Pedestal
+                -- Hàng 2: [🎃 Bí Ngô] Bệ trồng & Bí Khổng Lồ (unlockedPedestals/8 bệ • Túi: stockCount/maxSlots)
                 local r2 = ui.QuestRows[2]
                 if r2 then
                     r2.Row.Visible = true
-                    r2.Stars.Text = "[🎃 Bệ]"
+                    r2.Stars.Text = "[🎃 Bí Ngô]"
                     r2.Stars.TextColor3 = Color3.fromRGB(251, 146, 60)
-                    r2.Name.Text = "Bệ & Bí Ngô Khổng Lồ"
-                    r2.ProgText.Text = string.format("Bí Ngô: %d (Bậc %d) | Bệ mở: %d/8 | Stock: %d", prog.activeBigPumpkins, prog.activeBigPumpkinRung or 0, prog.unlockedPedestals, mach.stockCount or 0)
+                    r2.Name.Text = "Bệ Trồng & Bí Khổng Lồ"
+                    r2.ProgText.Text = string.format("%d/8 bệ • Túi: %d/%d • Bí: %s", prog.unlockedPedestals or 0, mach.stockCount or 0, mach.stockMax or 15, prog.activeBigPumpkins > 0 and ("Bậc " .. (prog.activeBigPumpkinRung or 1)) or "Không")
                     r2.ProgText.TextColor3 = (prog.activeBigPumpkins > 0) and Color3.fromRGB(251, 146, 60) or Color3.fromRGB(52, 211, 153)
-                    local pedFrac = math.clamp(prog.unlockedPedestals / 8, 0, 1)
+                    local pedFrac = math.clamp((prog.unlockedPedestals or 0) / 8, 0, 1)
                     r2.BarFill.Size = UDim2.new(pedFrac, 0, 1, 0)
                     r2.BarFill.BackgroundColor3 = Color3.fromRGB(251, 146, 60)
                 end
 
-                -- Hàng 3: Máy Nâng Cấp Upgrade Machine
+                -- Hàng 3: [⚡ Nâng Cấp] Upgrade Machine (upgLevel / upgMaxLevel + số Pumpkin Tokens)
                 local r3 = ui.QuestRows[3]
                 if r3 then
                     r3.Row.Visible = true
-                    r3.Stars.Text = "[⚡ Máy]"
+                    r3.Stars.Text = "[⚡ Nâng Cấp]"
                     r3.Stars.TextColor3 = Color3.fromRGB(168, 85, 247)
                     r3.Name.Text = "Upgrade Machine"
-                    r3.ProgText.Text = string.format("Tổng cấp: %d | Tokens: %s", mach.totalTiers or 0, Network.shorten(tokens))
+                    local upgLevel = mach.totalTiers or 0
+                    local upgMaxLevel = mach.maxTiers or 100
+                    r3.ProgText.Text = string.format("%d / %d Cấp • Tokens: %s", upgLevel, upgMaxLevel, Network.shorten(tokens))
                     r3.ProgText.TextColor3 = Color3.fromRGB(168, 85, 247)
-                    r3.BarFill.Size = UDim2.new(math.clamp((mach.totalTiers or 0) / 100, 0, 1), 0, 1, 0)
+                    r3.BarFill.Size = UDim2.new(math.clamp(upgLevel / upgMaxLevel, 0, 1), 0, 1, 0)
                     r3.BarFill.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
                 end
 
-                -- Hàng 4: Hot Cocoa & Trứng Đang Mở
+                -- Hàng 4: [☕ Cocoa] Hot Cocoa Boosts & Ép Pet Gold/Rainbow
                 local r4 = ui.QuestRows[4]
                 if r4 then
                     r4.Row.Visible = true
                     r4.Stars.Text = "[☕ Cocoa]"
                     r4.Stars.TextColor3 = Color3.fromRGB(250, 204, 21)
-                    r4.Name.Text = "Hot Cocoa & Trứng"
-                    r4.ProgText.Text = string.format("Cocoa: %dp | Mở: %s", mach.activeCocoaMin or 0, state.currentEggName or "None")
-                    r4.ProgText.TextColor3 = (mach.activeCocoaMin > 0) and Color3.fromRGB(52, 211, 153) or Color3.fromRGB(248, 113, 113)
-                    r4.BarFill.Size = UDim2.new(math.clamp(mach.activeCocoaMin / 60, 0, 1), 0, 1, 0)
+                    r4.Name.Text = "Hot Cocoa & Ép Pet"
+                    local cocoaMin = mach.activeCocoaMin or 0
+                    r4.ProgText.Text = string.format("Cocoa: %dp • Ép Pet: Sẵn sàng", cocoaMin)
+                    r4.ProgText.TextColor3 = (cocoaMin > 0) and Color3.fromRGB(52, 211, 153) or Color3.fromRGB(248, 113, 113)
+                    r4.BarFill.Size = UDim2.new(math.clamp(cocoaMin / 60, 0, 1), 0, 1, 0)
                     r4.BarFill.BackgroundColor3 = Color3.fromRGB(250, 204, 21)
                 end
             end
@@ -458,18 +463,17 @@ task.spawn(function()
 
                 local title = "📊 [BÁO CÁO PUMPKIN TYCOON] THỐNG KÊ ĐỊNH KỲ"
                 local desc = string.format(
-                    "Tài khoản: **%s**\nThời gian chạy: **%.1f giờ**\nTiến độ Đảo: **%d/%d (%.1f%%)**\nKhu vực cao nhất: **Zone %d (%s)**\nPatch Coins: **%s**\nPumpkin Tokens: **%s**\nTrứng đã mở: **%d**\nBệ Pedestal: **%d/8**",
+                    "Tài khoản: **%s**\nThời gian chạy: **%.1f giờ**\nTiến độ Đảo: **%d/%d (%.1f%%)**\nPatch Coins: **%s**\nPumpkin Tokens: **%s**\nTrứng đã mở: **%d**\nBệ Pedestal: **%d/8**\nAutoFarm: **%s**",
                     LocalPlayer.Name,
                     uptimeHours,
                     prog.ownedButtons,
                     prog.totalButtons,
                     prog.percent * 100,
-                    prog.bestZone,
-                    K.ZONES[prog.bestZone] and K.ZONES[prog.bestZone].DisplayName or "None",
                     Network.shorten(coins),
                     Network.shorten(tokens),
-                    state.totalEggsHatched,
-                    prog.unlockedPedestals
+                    state.totalEggsHatched or 0,
+                    prog.unlockedPedestals or 0,
+                    state.autoFarmActive and "BẬT" or "TẮT"
                 )
                 Webhook.sendWebhook(title, desc, 0xf59e0b, statusUrl)
             end

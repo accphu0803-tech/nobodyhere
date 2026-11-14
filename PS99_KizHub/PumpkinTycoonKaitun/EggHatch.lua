@@ -116,58 +116,51 @@ function EggHatch.getBestUnlockedEgg()
     initEggLibs()
     local buttonsState = plot:Save("Buttons") or {}
 
+    local isUnlocked = false
+    if PTButtons and type(PTButtons.Owned) == "function" then
+        isUnlocked = PTButtons.Owned(buttonsState, "CocoaCabin_Egg")
+    else
+        isUnlocked = (buttonsState["CocoaCabin_Egg"] == true or buttonsState["CocoaCabin_Egg"] == 1)
+    end
+
+    if not isUnlocked then return nil end
+
+    local eggAttr = plotModel:GetAttribute("CocoaCabin_Egg")
+    local eggPos = nil
+    if typeof(eggAttr) == "CFrame" then
+        eggPos = eggAttr.Position
+    elseif typeof(eggAttr) == "Vector3" then
+        eggPos = eggAttr
+    end
+
+    if not eggPos then return nil end
+
     local things = workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
+    local eggInstance = nil
+    local eggUid = nil
 
-    -- Quét từ Zone 5 (Golden Grove) xuống Zone 1 (Cocoa Cabin)
-    for zoneIdx = 5, 1, -1 do
-        local zoneInfo = K.ZONES[zoneIdx]
-        local isUnlocked = false
-
-        if PTButtons and type(PTButtons.Owned) == "function" then
-            isUnlocked = PTButtons.Owned(buttonsState, zoneInfo.EggBtn)
-        else
-            isUnlocked = (buttonsState[zoneInfo.EggBtn] == true or buttonsState[zoneInfo.EggBtn] == 1)
-        end
-
-        if isUnlocked then
-            -- Lấy vị trí nút Trứng từ plotModel:GetAttribute(zoneInfo.EggBtn)
-            local eggAttr = plotModel:GetAttribute(zoneInfo.EggBtn)
-            local eggPos = nil
-            if typeof(eggAttr) == "CFrame" then
-                eggPos = eggAttr.Position
-            elseif typeof(eggAttr) == "Vector3" then
-                eggPos = eggAttr
-            end
-
-            -- Match the unlocked zoneInfo.EggBtn by finding the CustomEggs child within 25 studs of plotModel:GetAttribute(zoneInfo.EggBtn).Position
-            local eggInstance = nil
-            local eggUid = nil
-
-            if eggPos and customEggsFolder then
-                local bestDist = 25
-                for _, egg in ipairs(customEggsFolder:GetChildren()) do
-                    local dist = (egg:GetPivot().Position - eggPos).Magnitude
-                    if dist <= bestDist then
-                        bestDist = dist
-                        eggInstance = egg
-                        eggUid = egg.Name -- 32-char UUID
-                    end
-                end
-            end
-
-            if eggUid then
-                return {
-                    zoneIndex = zoneIdx,
-                    eggName = zoneInfo.Egg,
-                    eggBtnId = zoneInfo.EggBtn,
-                    displayName = zoneInfo.DisplayName,
-                    eggInstance = eggInstance,
-                    eggUid = eggUid,
-                    pos = eggPos or (eggInstance and eggInstance:GetPivot().Position),
-                }
+    if customEggsFolder then
+        local bestDist = 35
+        for _, egg in ipairs(customEggsFolder:GetChildren()) do
+            local dist = (egg:GetPivot().Position - eggPos).Magnitude
+            if dist <= bestDist then
+                bestDist = dist
+                eggInstance = egg
+                eggUid = egg.Name -- 32-char UUID (e.g. "9cc0a4a2b51d4c64a17705d461d9c26c")
             end
         end
+    end
+
+    if eggUid then
+        return {
+            eggName = "Cocoa Cabin Egg",
+            eggBtnId = "CocoaCabin_Egg",
+            displayName = "Cocoa Cabin",
+            eggInstance = eggInstance,
+            eggUid = eggUid,
+            pos = eggPos or (eggInstance and eggInstance:GetPivot().Position),
+        }
     end
 
     return nil
@@ -192,16 +185,16 @@ function EggHatch.hatchBestEggTick(state)
     local targetEgg = EggHatch.getBestUnlockedEgg()
     if not targetEgg or not targetEgg.eggUid then return end
 
-    -- Ensure player is within 42 studs of targetEgg.pos before invoking CustomEggs_Hatch
+    -- Đứng tại sweet spot trên đảo (trong phạm vi 40 studs của eggPos)
     if targetEgg.pos then
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 42 then
+        if not hrp or (hrp.Position - targetEgg.pos).Magnitude > 40 then
             return
         end
     end
 
-    state.currentEggName = targetEgg.displayName .. " Egg"
+    state.currentEggName = "Cocoa Cabin Egg"
 
     -- Tính toán số lượng trứng tối đa có thể mở mỗi lần
     initEggLibs()
