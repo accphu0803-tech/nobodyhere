@@ -9,7 +9,7 @@ local genv = (type(getgenv) == "function" and getgenv()) or _G
 local Config = {
     -- Cài đặt chung & Hiệu năng (BẢN OPTIMIZE - ULTRA CPU SAVER CHO DÀN 80 ACC)
     Enabled = true,
-    ShowGui = false,            -- [80 ACC]: Ẩn GUI để tối đa hóa hiệu năng máy
+    ShowGui = true,            -- [80 ACC]: Ẩn GUI để tối đa hóa hiệu năng máy
     CPUSaver = true,            -- [CPU Saver]: Giảm tải CPU/GPU cực đại cho dàn acc (3D Rendering Off, Cap FPS, Mute)
     TargetFPS = 5,              -- Khóa 5 FPS cho tài nguyên nhẹ nhất
     Blackout = true,            -- Màn hình đen tối ưu

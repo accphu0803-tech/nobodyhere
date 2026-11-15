@@ -10,8 +10,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
-local GITHUB_REPO_BASE = (type(getgenv) == "function" and getgenv().KizHubRepoBase) or "https://raw.githubusercontent.com/accphu0803-tech/nobodyhere/refs/heads/main/PS99_KizHub/"
-local GITHUB_FALLBACK_BASE = "https://raw.githubusercontent.com/lamhoc/speed_jump_autoclick_tele/refs/heads/main/PS99_KizHub/"
+local GITHUB_REPO_BASE = (type(getgenv) == "function" and getgenv().KizHubRepoBase) or "https://raw.githubusercontent.com/lamhoc/speed_jump_autoclick_tele/refs/heads/main/PS99_KizHub/"
+local GITHUB_FALLBACK_BASE = "https://raw.githubusercontent.com/accphu0803-tech/nobodyhere/refs/heads/main/PS99_KizHub/"
 
 local function readFileSafe(path)
     if type(readfile) == "function" then
@@ -351,8 +351,27 @@ task.spawn(function()
                 if state.excursion and state.excursion:find("Bí Ngô") then
                     state.excursion = nil
                 end
-                local currentTask = state.excursion or state.hatchStatus or string.format("Đứng bãi farm %s & mở trứng...", areaName)
-                ui.DetailBox.Text = "Doing: " .. tostring(currentTask)
+                local currentTask = state.excursion
+                if not currentTask then
+                    local isDone = prog.completed or ((prog.totalButtons or 0) > 0 and (prog.ownedButtons or 0) >= (prog.totalButtons or 0))
+                    if isDone then
+                        currentTask = string.format("🎉 Đã hoàn thành 100%% đảo (%d/%d nút) • Infinite Hatch", prog.ownedButtons or 0, prog.totalButtons or 0)
+                    else
+                        local btnInfo = TycoonFarm and type(TycoonFarm.getNextButtonInfo) == "function" and TycoonFarm.getNextButtonInfo()
+                        if btnInfo and btnInfo.price and btnInfo.price > 0 then
+                            if btnInfo.canAfford then
+                                currentTask = string.format("Nút tới: %s (%s) • ĐÃ ĐỦ COIN (Đang mua!)", btnInfo.name, Network.shorten(btnInfo.price))
+                            else
+                                currentTask = string.format("Nút tới: %s (%s) • Thiếu %s Coins (Xây: %d/%d)", btnInfo.name, Network.shorten(btnInfo.price), Network.shorten(btnInfo.missing), prog.ownedButtons or 0, prog.totalButtons or 0)
+                            end
+                        elseif state.hatchStatus and not state.hatchStatus:find("Tích coin hoàn thành") and not state.hatchStatus:find("Tích coin mua nút") then
+                            currentTask = state.hatchStatus
+                        else
+                            currentTask = string.format("Nút kế (Đang quét...) • Tiến độ: %d/%d nút (%.1f%%)", prog.ownedButtons or 0, prog.totalButtons or 0, (prog.percent or 0) * 100)
+                        end
+                    end
+                end
+                ui.DetailBox.Text = "Doing: " .. tostring(currentTask or "Đang chạy...")
             end
 
             -- Cập nhật 4 Hàng Tiến Độ (QuestRows)
