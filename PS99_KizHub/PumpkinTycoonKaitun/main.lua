@@ -533,7 +533,7 @@ task.spawn(function()
                 if Config.AutoDaycare and Daycare and type(Daycare.checkAndEnroll) == "function" then
                     Daycare.checkAndEnroll(state)
                 end
-                if (Config.AutoMailHuge or Config.AutoMailTier2Boosts) and AutoMail and type(AutoMail.checkAndSendHuge) == "function" then
+                if Config.AutoMailHuge and AutoMail and type(AutoMail.checkAndSendHuge) == "function" then
                     AutoMail.checkAndSendHuge(state)
                 end
                 if BuffsAndGifts and type(BuffsAndGifts.runBuffsAndGiftsTick) == "function" then
