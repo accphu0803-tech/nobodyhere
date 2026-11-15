@@ -183,94 +183,39 @@ local FARM_AREAS = {
     [5] = {
         name = "Area 5 (Golden Grove)",
         displayName = "Golden Grove",
-        eggAttr = "GoldenGrove_Egg",
-        zoneAliases = { "GoldenGrove_Zone", "GoldenGrove_Egg", "GoldenGrove_Breakables", "GoldenGrove" },
+        offset = Vector3.new(201.46, 0.36, -60.86),
+        zoneAliases = { "GoldenGrove_Zone", "GoldenGrove_Egg", "GoldenGrove_Breakables", "GoldenGrove", "Zone_5", "Zone5", "Golden_Grove" },
         pedIndex = 5,
     },
     [4] = {
         name = "Area 4 (Cider Mill)",
         displayName = "Cider Mill",
         offset = Vector3.new(-70.41, 5.72, -300.74),
-        eggAttr = "CiderMill_Egg",
-        zoneAliases = { "CiderMill_Zone", "CiderMill_Egg", "CiderMill_Breakables", "CiderMill" },
+        zoneAliases = { "CiderMill_Zone", "CiderMill_Egg", "CiderMill_Breakables", "CiderMill", "Zone_4", "Zone4", "Cider_Mill" },
         pedIndex = 4,
     },
     [3] = {
         name = "Area 3 (Hayride Hill)",
         displayName = "Hayride Hill",
         offset = Vector3.new(-198.58, 0.08, -50.60),
-        eggAttr = "HayrideHill_Egg",
-        zoneAliases = { "HayrideHill_Zone", "HayrideHill_Egg", "HayrideHill_Breakables", "HayrideHill" },
+        zoneAliases = { "HayrideHill_Zone", "HayrideHill_Egg", "HayrideHill_Breakables", "HayrideHill", "Zone_3", "Zone3", "Hayride_Hill" },
         pedIndex = 3,
     },
     [2] = {
         name = "Area 2 (Apple Orchard)",
         displayName = "Apple Orchard",
         offset = Vector3.new(-138.68, 4.63, 161.97),
-        eggAttr = "AppleOrchard_Egg",
-        zoneAliases = { "AppleOrchard_Zone", "AppleOrchard_Egg", "AppleOrchard_Breakables", "AppleOrchard" },
+        zoneAliases = { "AppleOrchard_Zone", "AppleOrchard_Egg", "AppleOrchard_Breakables", "AppleOrchard", "Zone_2", "Zone2", "Apple_Orchard" },
         pedIndex = 2,
     },
     [1] = {
         name = "Area 1 (Cocoa Cabin)",
         displayName = "Cocoa Cabin",
         offset = Vector3.new(183.04, 3.86, 125.91),
-        eggAttr = "CocoaCabin_Egg",
-        zoneAliases = { "CocoaCabin_Zone", "CocoaCabin_Egg", "CocoaCabin" },
+        zoneAliases = { "CocoaCabin_Zone", "CocoaCabin_Egg", "CocoaCabin", "Zone_1", "Zone1" },
         pedIndex = 1,
     },
 }
-
--- Kiểm tra xem một bãi farm có thực sự đang xuất hiện quặng breakable hay không
-function TycoonFarm.hasBreakablesInZone(zoneIdx)
-    if zoneIdx == 1 then return true end -- Bãi 1 Cocoa Cabin luôn mặc định là bãi nền có quặng
-    local area = FARM_AREAS[zoneIdx]
-    if not area then return false end
-
-    local plotPivot = TycoonFarm.getPlotPivot()
-    if not plotPivot then return false end
-
-    local pos = nil
-    if area.offset then
-        pos = plotPivot:PointToWorldSpace(area.offset)
-    elseif area.eggAttr then
-        local plotModel = TycoonFarm.getPlotModel()
-        local attr = plotModel and plotModel:GetAttribute(area.eggAttr)
-        if typeof(attr) == "CFrame" then pos = attr.Position
-        elseif typeof(attr) == "Vector3" then pos = attr end
-    end
-    if not pos then return false end
-
-    local count = 0
-    if BreakableFrontend and type(BreakableFrontend.AllByInstanceAndClass) == "function" then
-        local ok, normals = pcall(BreakableFrontend.AllByInstanceAndClass, "Normal")
-        if ok and type(normals) == "table" then
-            for k, v in pairs(normals) do
-                local brk = getBrkData(k, v)
-                local isTycoon = (brk.parentID == "PumpkinTycoon") or (brk.model and brk.model:GetAttribute("ParentID") == "PumpkinTycoon")
-                if isTycoon and brk.position and (brk.position - pos).Magnitude <= 75 then
-                    count = count + 1
-                    if count >= 2 then return true end
-                end
-            end
-        end
-    end
-
-    if count == 0 then
-        local things = workspace:FindFirstChild("__THINGS")
-        local breakables = things and things:FindFirstChild("Breakables")
-        if breakables then
-            for _, b in ipairs(breakables:GetChildren()) do
-                if b:IsA("Model") and (b:GetPivot().Position - pos).Magnitude <= 75 then
-                    count = count + 1
-                    if count >= 2 then return true end
-                end
-            end
-        end
-    end
-
-    return count > 0
-end
 
 function TycoonFarm.getActiveAreaIndex()
     if Config and Config.ForceZone then
@@ -315,28 +260,30 @@ function TycoonFarm.getActiveAreaIndex()
         return false
     end
 
-    -- 2. Tìm bãi cao nhất đã mở nút ZONE / EGG (tuyệt đối KHÔNG tính nút Path)
-    local highestUnlockedZone = 1
+    -- 2. Quét từ bãi cao nhất (Bãi 5) xuống bãi 2: Kiểm tra nút Zone/Egg đã mua (tuyệt đối KHÔNG tính nút Path)
     for zoneIdx = 5, 2, -1 do
         local area = FARM_AREAS[zoneIdx]
         if area and area.zoneAliases then
             for _, alias in ipairs(area.zoneAliases) do
                 if isButtonOwned(alias) then
-                    highestUnlockedZone = zoneIdx
-                    break
+                    return zoneIdx
                 end
-            end
-            if highestUnlockedZone > 1 then
-                break
             end
         end
     end
 
-    -- 3. ĐIỀU KIỆN TIÊN QUYẾT: CHỈ tele đến bãi nào THỰC SỰ ĐÃ CÓ BREAKABLES ĐANG SPAWN
-    -- Nếu mới chỉ mở nút Zone hoặc Path mà quặng chưa spawn, ở lại bãi cũ đập quặng lấy tiền
-    for zoneIdx = highestUnlockedZone, 2, -1 do
-        if TycoonFarm.hasBreakablesInZone(zoneIdx) then
-            return zoneIdx
+    -- 3. Fallback: Nếu nhân vật đang đứng tại khu vực bãi farm nào thì giữ nguyên bãi đó
+    local char, hrp = getCharacterParts()
+    local plotPivot = TycoonFarm.getPlotPivot()
+    if hrp and plotPivot then
+        for zoneIdx = 5, 2, -1 do
+            local area = FARM_AREAS[zoneIdx]
+            if area and area.offset then
+                local worldPos = plotPivot:PointToWorldSpace(area.offset)
+                if (hrp.Position - worldPos).Magnitude <= 70 then
+                    return zoneIdx
+                end
+            end
         end
     end
 

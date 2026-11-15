@@ -115,6 +115,7 @@ local EGG_AREAS = {
         name = "Egg 5 (Golden Grove)",
         eggName = "Golden Grove Egg",
         displayName = "Golden Grove",
+        offset = Vector3.new(201.46, 0.36, -60.86),
         btnId = "GoldenGrove_Egg",
         attrName = "GoldenGrove_Egg",
         unitCost = 15000,
