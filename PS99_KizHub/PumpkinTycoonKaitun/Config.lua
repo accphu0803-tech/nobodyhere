@@ -147,7 +147,7 @@ local K = {
         PlaceStock      = "XC_Allocate",
         Upgrade         = "OQ_Advance",
         ExtendCocoa     = "VB_Extend",
-        OpenGift        = "YR_Hydrate",
+        OpenGift        = "KX_Release",
     },
 
     -- 5 Khu vực bãi cày & Trứng tương ứng

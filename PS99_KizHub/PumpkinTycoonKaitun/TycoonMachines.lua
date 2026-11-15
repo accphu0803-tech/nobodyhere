@@ -423,32 +423,40 @@ local function runFlannelGifts(plot)
 
                             print(string.format("[KizHub Tycoon] 🎁 Đang tự động mở %d Flannel Gift (Cat: %s, ID: %s)...", count, cat, itemId))
 
-                            -- 1. Client module LootboxCmds
+                            -- 1. Client module PumpkinTycoonCmds.Gift & LootboxCmds
                             pcall(function()
+                                local ptGift = safeRequire({ "Library", "Client", "PumpkinTycoonCmds", "Gift" })
+                                if ptGift and type(ptGift.Open) == "function" then
+                                    ptGift.Open(itemId, count)
+                                    ptGift.Open(uid, count)
+                                end
                                 local lbMod = safeRequire({ "Library", "Client", "LootboxCmds" })
                                 if lbMod and type(lbMod.Open) == "function" then
                                     lbMod.Open(itemId, count)
+                                    lbMod.Open(uid, count)
                                 end
                             end)
 
-                            -- 2. Remotes qua Network
-                            Network.netInvoke("Lootbox: Open", itemId, count)
-                            Network.netFire("Lootbox: Open", itemId, count)
-                            Network.netInvoke("Lootbox: Open", uid, count)
-                            Network.netFire("Lootbox: Open", uid, count)
-                            Network.netInvoke("GiftBag: Open", uid, count)
-                            Network.netFire("GiftBag: Open", uid, count)
-                            Network.netInvoke("GiftBag_Open", uid, count)
-
-                            -- 3. Verbs trên Plot
+                            -- 2. Server Verb trên Plot: KX_Release
                             if plot then
                                 pcall(function()
-                                    plot:Invoke(K.VERBS.OpenGift or "OpenGift", count)
+                                    plot:Invoke(K.VERBS.OpenGift or "KX_Release", uid, count)
                                 end)
                                 pcall(function()
-                                    Network.netInvoke("PumpkinTycoon_GiftOpen", count)
+                                    plot:Invoke(K.VERBS.OpenGift or "KX_Release", itemId, count)
+                                end)
+                                pcall(function()
+                                    plot:Invoke(K.VERBS.OpenGift or "KX_Release", count)
                                 end)
                             end
+
+                            -- 3. Remotes dự phòng qua Network
+                            pcall(function()
+                                Network.netInvoke("Lootbox: Open", itemId, count)
+                                Network.netInvoke("Lootbox: Open", uid, count)
+                                Network.netInvoke("GiftBag: Open", uid, count)
+                                Network.netInvoke("GiftBag_Open", uid, count)
+                            end)
 
                             task.wait(0.2)
                             pcall(function()
