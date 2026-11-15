@@ -241,16 +241,6 @@ function AutoMail.stepMailTick(state)
         end
     end
 end
-            FailedUIDBlacklist[huge.UID] = true
-            state.mailStatus = "Pet không thể trade (Bỏ qua)"
-            task.wait(2)
-        else
-            nextMailAttemptAt = os.clock() + (Config.MailRetryInterval or MailSettings.RetryIntervalSec)
-            state.mailStatus = "Chờ gửi lại sau 30p (Lỗi gửi thư)"
-            print(string.format("[KizHub Mail] ⚠️ Lỗi gửi thư (%s) -> Chờ thử lại sau 30p", tostring(resSend)))
-        end
-    end
-end
 
 -- Alias tương thích cho các script gọi hàm
 AutoMail.checkAndSendHuge = AutoMail.stepMailTick
