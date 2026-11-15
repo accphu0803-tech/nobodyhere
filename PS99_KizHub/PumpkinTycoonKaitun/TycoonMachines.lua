@@ -328,25 +328,35 @@ local function runHotCocoa(plot, buttonsState)
                             end
 
                             if matched then
-                                local amt = tonumber(itemData._am) or 1
-                                if amt > 0 then
-                                    if cat == "Potion" then
-                                        Network.netFire("Potions: Consume", itemData.id)
-                                    else
-                                        -- Thử HotCocoa_Consume nếu là Cocoa
-                                        if idLower:find("cocoa") then
-                                            local okCocoa = Network.netInvoke("HotCocoa_Consume", uid)
-                                            if not okCocoa then
-                                                Network.netFire("HotCocoa_Consume", uid)
+                                -- RÀNG BUỘC THEO LỆNH CỦA DJ:
+                                -- 1. Island Luck Boost
+                                -- 2. Patch Coin Boost
+                                -- 3. Pumpkin Damage Boost
+                                -- CHỈ CẮN TIER 1 ĐỂ FARM. TIER 2 TUYỆT ĐỐI KHÔNG CẮN, ĐỂ DÀNH GIFT QUA MAILBOX!
+                                local tier = tonumber(itemData.tn) or tonumber(itemData.tier) or 1
+                                local isEventTargetBoost = (itemData.id == "Island Luck Boost" or itemData.id == "Patch Coin Boost" or itemData.id == "Pumpkin Damage Boost")
+
+                                if not (isEventTargetBoost and tier >= 2) then
+                                    local amt = tonumber(itemData._am) or 1
+                                    if amt > 0 then
+                                        if cat == "Potion" then
+                                            Network.netFire("Potions: Consume", itemData.id)
+                                        else
+                                            -- Thử HotCocoa_Consume nếu là Cocoa
+                                            if idLower:find("cocoa") then
+                                                local okCocoa = Network.netInvoke("HotCocoa_Consume", uid)
+                                                if not okCocoa then
+                                                    Network.netFire("HotCocoa_Consume", uid)
+                                                end
+                                            end
+                                            -- Gọi Consumables_Consume chuẩn
+                                            local okCons = Network.netInvoke("Consumables_Consume", uid, 1)
+                                            if not okCons then
+                                                Network.netFire("Consumables_Consume", uid, 1)
                                             end
                                         end
-                                        -- Gọi Consumables_Consume chuẩn
-                                        local okCons = Network.netInvoke("Consumables_Consume", uid, 1)
-                                        if not okCons then
-                                            Network.netFire("Consumables_Consume", uid, 1)
-                                        end
+                                        task.wait(0.08)
                                     end
-                                    task.wait(0.08)
                                 end
                             end
                         end

@@ -103,9 +103,11 @@ local Config = {
     GiftOpenInterval = 4,
     AutoClaimFreeGifts = true,
 
-    -- Tính năng phụ trợ
+    -- Mailbox & Quà tặng
     AutoDaycare = false,
     AutoMailHuge = true,
+    AutoMailTier2Boosts = true, -- Tự động gift qua Mailbox khi có Tier 2 Boost (Island Luck, Patch Coin, Pumpkin Damage) dù chỉ 1 cái
+    AutoConsumeTier1Boosts = true, -- Tự động cắn Boost Tier 1 để tối ưu farm
     MailRecipient = genv.MailRecipient or "Kizmoii_VNG",
     MailRetryInterval = 1800,
     MailCooldownSec = 61,
