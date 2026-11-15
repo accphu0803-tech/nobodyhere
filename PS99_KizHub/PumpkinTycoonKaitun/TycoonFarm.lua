@@ -412,13 +412,19 @@ function TycoonFarm.ensureAutoFarmEnabled(state, sweetPos)
                     AutoFarmCmds.Enable()
                 end
                 Network.netInvoke("AutoFarm_Enable", true)
-                if sweetPos then
-                    Network.netFire("AutoFarm_LogPosition", sweetPos)
-                end
+            end
+            if sweetPos then
+                Network.netFire("AutoFarm_LogPosition", sweetPos)
             end
             if state then
                 state.autoFarmActive = AutoFarmCmds.IsEnabled()
             end
+        else
+            Network.netInvoke("AutoFarm_Enable", true)
+            if sweetPos then
+                Network.netFire("AutoFarm_LogPosition", sweetPos)
+            end
+            if state then state.autoFarmActive = true end
         end
     end)
 end
@@ -650,30 +656,9 @@ function TycoonFarm.farmBestPatchTick(state)
         end
     end
 
-    -- Điều phối pet: pet:SetTarget(brk.model), Breakables_JoinPetBulk, Breakables_PlayerDealDamage
+    -- Đánh phụ bằng tay (Player Click Damage) vào quặng gần nhất trong bãi, TUYỆT ĐỐI KHÔNG can thiệp/khóa mục tiêu của Pet
+    -- Toàn bộ Pet (kể cả Huge) được cơ chế AutoFarm chính thức của game tự động dẫn đi đập Bí Ngô Khổng Lồ và tự về bãi
     if #targets > 0 then
-        local playerPets = getPlayerPets()
-        local petUids = TycoonFarm.petEuids()
-
-        if #playerPets > 0 then
-            for idx, pet in ipairs(playerPets) do
-                local t = targets[((idx - 1) % #targets) + 1]
-                if pet.SetAnchored then pet:SetAnchored(false) end
-                if pet.SetTarget and t.model then pet:SetTarget(t.model) end
-            end
-        end
-
-        if #petUids > 0 then
-            local joinMap = {}
-            for idx, pUid in ipairs(petUids) do
-                local t = targets[((idx - 1) % #targets) + 1]
-                joinMap[pUid] = tostring(t.uid)
-            end
-            pcall(function()
-                Network.netFire("Breakables_JoinPetBulk", joinMap)
-            end)
-        end
-
         local primary = targets[1]
         if primary and primary.uid then
             pcall(function()
