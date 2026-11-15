@@ -40,9 +40,6 @@ function BuffsAndGifts.checkAndClaimFreeGifts(state)
                 if okInv and resInv == true then claimed = true end
             end
             if not claimed then
-                Net.netFire("Redeem Free Gift", i)
-            end
-            if not claimed then
                 local r = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Redeem Free Gift")
                 if r then
                     if r:IsA("RemoteFunction") then pcall(function() r:InvokeServer(i) end)

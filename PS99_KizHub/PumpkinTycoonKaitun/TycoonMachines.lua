@@ -139,7 +139,6 @@ local function runUpgrades(plot, buttonsState)
                 plot:Invoke(K.VERBS.Upgrade, track)
             end)
             if okU then
-                print(string.format("[KizHub Tycoon] ⚡ Nâng cấp thành công %s lên bậc %d (Chi phí: %d Tokens)", track, curTier + 1, cost))
                 tokens = tokens - cost
                 task.wait(0.2)
             end
@@ -430,7 +429,6 @@ local function runGoldRainbowPets(buttonsState)
                     local batches = math.floor(am / 10)
                     local okM = Network.netInvoke("GoldMachine_Activate", uid, batches)
                     if okM then
-                        print(string.format("[KizHub Tycoon] 🌟 Đã nâng cấp %d mẻ Vàng cho %s", batches, p.id))
                         task.wait(0.3)
                     end
                 end
@@ -440,7 +438,6 @@ local function runGoldRainbowPets(buttonsState)
                     local batches = math.floor(am / 10)
                     local okR = Network.netInvoke("RainbowMachine_Activate", uid, batches)
                     if okR then
-                        print(string.format("[KizHub Tycoon] 🌈 Đã nâng cấp %d mẻ Cầu Vồng cho %s", batches, p.id))
                         task.wait(0.3)
                     end
                 end
@@ -475,8 +472,6 @@ local function runFlannelGifts(plot)
                         if itemId:lower():find("flannel") then
                             local am = tonumber(item._am or item.Amount or item.am or 1) or 1
                             local count = math.clamp(am, 1, 100)
-
-                            print(string.format("[KizHub Tycoon] 🎁 Đang tự động mở %d Flannel Gift (Cat: %s, ID: %s)...", count, cat, itemId))
 
                             -- 1. Client module PumpkinTycoonCmds.Gift & LootboxCmds
                             pcall(function()

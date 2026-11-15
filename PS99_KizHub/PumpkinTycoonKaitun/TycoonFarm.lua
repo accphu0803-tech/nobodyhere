@@ -828,7 +828,6 @@ function TycoonFarm.checkAndBuyButtons(state)
                         return plot:Invoke(K.VERBS.BuyButton, btn.Id)
                     end)
                     if okB and resB == true then
-                        print(string.format("[KizHub Tycoon] ✔ Đã mua nút: %s (Giá: %s Coins)", tostring(btn.Id), Network.shorten(price)))
                         if Modules and Modules.EggHatch and type(Modules.EggHatch.onButtonBought) == "function" then
                             Modules.EggHatch.onButtonBought(btn.Id)
                         end

@@ -372,7 +372,6 @@ function EggHatch.hatchBestEggTick(state)
             end
 
             if isOwned then
-                print(string.format("[KizHub Tycoon] 🎯 Nút %s đã mua thành công! Reset chu kỳ, tiếp tục mở egg 3 lần.", tostring(waitingForButtonId)))
                 waitingForButtonId = nil
                 waitingForButtonPrice = 0
                 hatchCycleCount = 0
@@ -415,7 +414,6 @@ function EggHatch.hatchBestEggTick(state)
                 waitingForButtonId = nextBtn.Id
                 waitingForButtonPrice = btnPrice
                 local curCoins = Network.currency(K.CURRENCY) or 0
-                print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
                 state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
                 return -- NGƯNG MỞ EGG NỮA!
             else
@@ -546,10 +544,9 @@ function EggHatch.hatchBestEggTick(state)
         end)
 
         if infiniteFinal then
-            print(string.format("[KizHub Tycoon] 🥚 [INFINITE HATCH] %s (+%d quả) • Đã mở tổng cộng: %d", targetEgg.displayName or targetEgg.eggName, allowedHatch, state.totalEggsHatched or 0))
+            -- Muted log để tránh spam console khi treo nhiều acc
         else
             hatchCycleCount = hatchCycleCount + 1
-            print(string.format("[KizHub Tycoon] 🥚 Mở egg lần %d/%d (Đã mở tổng cộng: %d)", hatchCycleCount, maxCycles, state.totalEggsHatched or 0))
             if hatchCycleCount >= maxCycles then
                 local nextBtn, btnPrice = nil, 0
                 if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
@@ -563,7 +560,6 @@ function EggHatch.hatchBestEggTick(state)
                     waitingForButtonId = nextBtn.Id
                     waitingForButtonPrice = btnPrice
                     local curCoins = Network.currency(K.CURRENCY) or 0
-                    print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
                     state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
                 else
                     hatchCycleCount = 0
