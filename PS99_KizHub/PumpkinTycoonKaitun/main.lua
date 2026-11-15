@@ -179,7 +179,7 @@ BuffsAndGifts.init(sharedDeps)
 -- 2. TỐI ƯU HIỆU NĂNG (CPU SAVER) & CHỐNG AFK KICK
 -- =========================================================================
 
-if Config.CPUSaver ~= false then
+if Config.CPUSaver == true then
     EngineOptim.applyAll(Config.TargetFPS or 5, true)
     EngineOptim.set3dRendering(false)
     EngineOptim.muteAllSounds()
@@ -190,10 +190,11 @@ if Config.CPUSaver ~= false then
     EngineOptim.startMemoryCleanupLoop()
     print("[KizHub Tycoon] ❄️ ĐÃ KÍCH HOẠT CHẾ ĐỘ CPU SAVER (3D Rendering Off, Cap FPS, Mute)!")
 else
-    EngineOptim.applyAll(Config.TargetFPS or 5, Config.Blackout ~= false)
+    EngineOptim.restoreNormal(Config.TargetFPS or 60)
     if Config.HidePlayers then
         EngineOptim.hideOtherPlayers()
     end
+    print(string.format("[KizHub Tycoon] 🎮 CHẾ ĐỘ THƯỜNG / KHÔNG OPTIMIZE (3D Rendering ON, %d FPS, Full GUI)!", Config.TargetFPS or 60))
 end
 
 if Config.InfinitePetSpeed ~= false and TycoonFarm and type(TycoonFarm.installInfinitePetSpeed) == "function" then
@@ -295,6 +296,8 @@ end
 local ui = DashboardGui.create({
     Mode = "Tycoon",
     BadgeTitle = "🎃 Kiz Hub | Pumpkin Patch Tycoon",
+    Blackout = (Config.Blackout == true),
+    ShowGui = (Config.ShowGui ~= false),
     OnClose = function()
         state.alive = false
     end,
@@ -366,7 +369,7 @@ task.spawn(function()
                     if isDone then
                         r1.ProgText.Text = string.format("%d / %d (100%%) • HOÀN THÀNH", prog.ownedButtons, prog.totalButtons)
                         r1.ProgText.TextColor3 = Color3.fromRGB(52, 211, 153)
-                    elseif btnInfo then
+                    elseif btnInfo and btnInfo.price and btnInfo.price > 0 then
                         if btnInfo.canAfford then
                             r1.ProgText.Text = string.format("%d/%d (%.0f%%) • Nút: %s (%s - ĐỦ TIỀN)", prog.ownedButtons, prog.totalButtons, prog.percent * 100, btnInfo.name, Network.shorten(btnInfo.price))
                             r1.ProgText.TextColor3 = Color3.fromRGB(52, 211, 153)
@@ -374,9 +377,12 @@ task.spawn(function()
                             r1.ProgText.Text = string.format("%d/%d (%.0f%%) • %s (Thiếu %s)", prog.ownedButtons, prog.totalButtons, prog.percent * 100, btnInfo.name, Network.shorten(btnInfo.missing))
                             r1.ProgText.TextColor3 = Color3.fromRGB(248, 113, 113)
                         end
+                    elseif btnInfo and btnInfo.name then
+                        r1.ProgText.Text = string.format("%d/%d (%.0f%%) • Nút: %s (Đang tích coin)", prog.ownedButtons, prog.totalButtons, prog.percent * 100, btnInfo.name)
+                        r1.ProgText.TextColor3 = Color3.fromRGB(251, 191, 36)
                     else
-                        r1.ProgText.Text = string.format("%d / %d (%.0f%%) • %s", prog.ownedButtons, prog.totalButtons, prog.percent * 100, isDone and "HOÀN THÀNH" or "ĐANG XÂY")
-                        r1.ProgText.TextColor3 = isDone and Color3.fromRGB(52, 211, 153) or Color3.fromRGB(248, 113, 113)
+                        r1.ProgText.Text = string.format("%d/%d (%.0f%%) • Đang tích coin mua nút", prog.ownedButtons, prog.totalButtons, prog.percent * 100)
+                        r1.ProgText.TextColor3 = Color3.fromRGB(251, 191, 36)
                     end
                     r1.BarFill.Size = UDim2.new(math.clamp(prog.percent, 0, 1), 0, 1, 0)
                     r1.BarFill.BackgroundColor3 = isDone and Color3.fromRGB(52, 211, 153) or Color3.fromRGB(56, 189, 248)
