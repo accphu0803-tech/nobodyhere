@@ -1227,7 +1227,13 @@ local function HookOtherPlayerEvents(plr)
 end
 
 local function SetupMapOptimizer()
-    if Config.CPUSaver then
+    local isMobile = false
+    pcall(function()
+        local uis = game:GetService("UserInputService")
+        isMobile = uis.TouchEnabled and not uis.KeyboardEnabled
+    end)
+
+    if Config.CPUSaver and not isMobile then
         pcall(function()
             if type(setfpscap) == "function" then
                 setfpscap(Config.TargetFPS or 5)
@@ -1240,7 +1246,7 @@ local function SetupMapOptimizer()
     else
         pcall(function()
             if type(setfpscap) == "function" then
-                setfpscap(Config.TargetFPS or 60)
+                setfpscap(Config.TargetFPS or (isMobile and 30 or 60))
             end
             local r = game:GetService("RunService")
             if type(r.Set3dRenderingEnabled) == "function" then
@@ -4760,19 +4766,26 @@ local MiniGuiState = {
     MailLabel = nil,
 }
 
+local SetupMiniGui -- Forward declaration
+
 local function UpdateMiniGui()
-    if not MiniGuiState.ScreenGui or not MiniGuiState.ScreenGui.Parent then return end
+    if not MiniGuiState.ScreenGui or not MiniGuiState.ScreenGui.Parent then
+        if type(SetupMiniGui) == "function" then
+            SetupMiniGui()
+        end
+        return
+    end
 
     local ok, err = pcall(function()
-        local coins = Runtime.Stats.Coins or 0
+        local coins = (Runtime and Runtime.Stats and Runtime.Stats.Coins) or 0
         local tokens = GetCurrency((PT and PT.TOKEN) or "PumpkinTokens") or 0
-        local hatched = Runtime.Stats.EggsHatched or 0
-        local gifts = Runtime.Stats.GiftsOpened or 0
-        local phase = Runtime.Stats.Phase or "Đang chạy..."
+        local hatched = (Runtime and Runtime.Stats and Runtime.Stats.EggsHatched) or 0
+        local gifts = (Runtime and Runtime.Stats and Runtime.Stats.GiftsOpened) or 0
+        local phase = (Runtime and Runtime.Stats and Runtime.Stats.Phase) or "Đang chạy..."
         local mailStat = (MailState and MailState.Status) or "Rảnh"
-        local nextBtn = Runtime.Stats.NextButtonName or "Đang quét..."
-        local missing = Runtime.Stats.MissingCoins or 0
-        local cost = Runtime.Stats.NextButtonCost or 0
+        local nextBtn = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonName) or "Đang quét..."
+        local missing = (Runtime and Runtime.Stats and Runtime.Stats.MissingCoins) or 0
+        local cost = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonCost) or 0
 
         if MiniGuiState.CoinsLabel then
             MiniGuiState.CoinsLabel.Text = string.format("💰 Coins: %s • 🎟️ Tokens: %s", ShortenNumber(coins), ShortenNumber(tokens))
@@ -4803,14 +4816,25 @@ local function UpdateMiniGui()
     end
 end
 
-local function SetupMiniGui()
+SetupMiniGui = function()
     if Config.ShowGui == false then return end
     pcall(function()
+        local lp = game:GetService("Players").LocalPlayer
         local parentTarget = nil
-        if type(gethui) == "function" then
-            local ok, res = pcall(gethui)
-            if ok and res then parentTarget = res end
+
+        -- 1. Ưu tiên PlayerGui để 100% hiển thị trên mọi thiết bị (Mobile/PC/Executor)
+        if lp then
+            local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:FindFirstChild("PlayerGui")
+            if pg then parentTarget = pg end
         end
+
+        -- 2. Fallback gethui() nếu có
+        if not parentTarget and type(gethui) == "function" then
+            local ok, res = pcall(gethui)
+            if ok and res and typeof(res) == "Instance" then parentTarget = res end
+        end
+
+        -- 3. Fallback CoreGui / RobloxGui
         if not parentTarget then
             pcall(function()
                 local cg = game:GetService("CoreGui")
@@ -4819,8 +4843,9 @@ local function SetupMiniGui()
                 end
             end)
         end
-        if not parentTarget then
-            parentTarget = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+
+        if not parentTarget and lp then
+            parentTarget = lp:WaitForChild("PlayerGui", 5)
         end
         if not parentTarget then return end
 
@@ -4830,18 +4855,20 @@ local function SetupMiniGui()
         local sg = Instance.new("ScreenGui")
         sg.Name = "KizHub_MiniTycoonGui"
         sg.ResetOnSpawn = false
-        sg.DisplayOrder = 9999
+        sg.DisplayOrder = 999999
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         pcall(function() sg.IgnoreGuiInset = true end)
 
         local f = Instance.new("Frame")
         f.Name = "MiniContainer"
-        f.Size = UDim2.new(0, 275, 0, 126)
-        f.Position = UDim2.new(0, 15, 0, 50)
+        f.Size = UDim2.new(0, 280, 0, 130)
+        f.Position = UDim2.new(0, 15, 0, 70)
         f.BackgroundColor3 = Color3.fromRGB(15, 17, 23)
         f.BackgroundTransparency = 0.15
         f.BorderSizePixel = 0
         f.Active = true
         f.Draggable = true
+        f.ZIndex = 100
         f.Parent = sg
 
         local corner = Instance.new("UICorner")
@@ -4863,13 +4890,14 @@ local function SetupMiniGui()
         title.Font = Enum.Font.GothamBold
         title.TextXAlignment = Enum.TextXAlignment.Left
         title.AutoLocalize = false
+        title.ZIndex = 101
         title.Parent = f
 
         -- Nút bấm bật/tắt 3D Saver trực tiếp trên GUI để tiện quan sát
         local toggle3D = Instance.new("TextButton")
         toggle3D.Name = "Toggle3DButton"
         toggle3D.Size = UDim2.new(0, 75, 0, 18)
-        toggle3D.Position = UDim2.new(0, 190, 0, 5)
+        toggle3D.Position = UDim2.new(0, 195, 0, 5)
         toggle3D.Text = Config.CPUSaver and "3D: OFF" or "3D: ON"
         toggle3D.TextColor3 = Color3.fromRGB(255, 255, 255)
         toggle3D.BackgroundColor3 = Config.CPUSaver and Color3.fromRGB(220, 38, 38) or Color3.fromRGB(22, 163, 74)
@@ -4877,6 +4905,7 @@ local function SetupMiniGui()
         toggle3D.Font = Enum.Font.GothamBold
         toggle3D.BorderSizePixel = 0
         toggle3D.AutoLocalize = false
+        toggle3D.ZIndex = 102
         toggle3D.Parent = f
 
         local btnCorner = Instance.new("UICorner")
@@ -4911,21 +4940,21 @@ local function SetupMiniGui()
             l.Font = Enum.Font.GothamMedium
             l.TextXAlignment = Enum.TextXAlignment.Left
             l.AutoLocalize = false -- CHỐNG LỖI TỰ ĐỘNG DỊCH THÀNH "Nhãn" CỦA ROBLOX
+            l.ZIndex = 101
             l.Text = defaultText or "..."
             l.Parent = f
             return l
         end
 
-        MiniGuiState.CoinsLabel = makeLabel(24, Color3.fromRGB(251, 191, 36), "💰 Coins: 0 • 🎟️ Tokens: 0")
-        MiniGuiState.ButtonLabel = makeLabel(42, Color3.fromRGB(244, 114, 182), "🔘 Nút: Đang quét...")
-        MiniGuiState.HatchLabel = makeLabel(60, Color3.fromRGB(168, 85, 247), "🥚 Hatched: 0 • 🎁 Gifts: 0")
-        MiniGuiState.PhaseLabel = makeLabel(78, Color3.fromRGB(56, 189, 248), "📌 Khởi động...")
-        MiniGuiState.MailLabel = makeLabel(96, Color3.fromRGB(52, 211, 153), "📦 Mail: Sẵn sàng")
+        MiniGuiState.CoinsLabel = makeLabel(25, Color3.fromRGB(251, 191, 36), "💰 Coins: 0 • 🎟️ Tokens: 0")
+        MiniGuiState.ButtonLabel = makeLabel(44, Color3.fromRGB(244, 114, 182), "🔘 Nút: Đang kết nối...")
+        MiniGuiState.HatchLabel = makeLabel(63, Color3.fromRGB(168, 85, 247), "🥚 Hatched: 0 • 🎁 Gifts: 0")
+        MiniGuiState.PhaseLabel = makeLabel(82, Color3.fromRGB(56, 189, 248), "📌 Đang kết nối game...")
+        MiniGuiState.MailLabel = makeLabel(101, Color3.fromRGB(52, 211, 153), "📦 Mail: Sẵn sàng")
 
         sg.Parent = parentTarget
         MiniGuiState.ScreenGui = sg
 
-        -- Cập nhật tức thì ngay frame đầu tiên
         task.defer(UpdateMiniGui)
     end)
 end
@@ -5056,13 +5085,16 @@ end
 -- ============================================================================
 -- 14. ENTRYPOINT
 -- ============================================================================
+-- Khởi tạo GUI ngay lập tức khi inject script, không chờ WaitReady
+pcall(SetupMiniGui)
+
 if WaitReady() and IsRunning() then
     SetupAntiAfk()
     DisableNativeAutoFarmOnce()
     StepPetSpeedBuff()
     SetupMapOptimizer()
     pcall(CheckNewHugeWatcher)
-    SetupMiniGui()
+    pcall(SetupMiniGui)
     Log("INFO", "Pumpkin Patch Tycoon Kaitun initialized (RushButtons=%s, KeepRung=%d, TargetEgg=%s, PetSpeed=%sx, OptimizeMap=%s).",
         tostring(Config.RushButtonsFirst),
         tonumber(Config.KeepRung) or 0,
