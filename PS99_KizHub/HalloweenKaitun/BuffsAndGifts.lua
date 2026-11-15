@@ -118,4 +118,10 @@ function BuffsAndGifts.runDelayedBuffs(state)
     end
 end
 
+function BuffsAndGifts.runBuffsAndGiftsTick(state)
+    state = state or {}
+    BuffsAndGifts.runDelayedBuffs(state)
+    BuffsAndGifts.checkAndClaimFreeGifts(state)
+end
+
 return BuffsAndGifts

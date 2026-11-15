@@ -176,12 +176,28 @@ AutoMail.init(sharedDeps)
 BuffsAndGifts.init(sharedDeps)
 
 -- =========================================================================
--- 2. TỐI ƯU HIỆU NĂNG & CHỐNG AFK KICK
+-- 2. TỐI ƯU HIỆU NĂNG (CPU SAVER) & CHỐNG AFK KICK
 -- =========================================================================
 
-EngineOptim.applyAll(Config.TargetFPS or 5, Config.Blackout ~= false)
-if Config.HidePlayers then
+if Config.CPUSaver ~= false then
+    EngineOptim.applyAll(Config.TargetFPS or 5, true)
+    EngineOptim.set3dRendering(false)
+    EngineOptim.muteAllSounds()
+    EngineOptim.disableHeavyLighting()
+    EngineOptim.purgeHeavyVisuals()
+    EngineOptim.stopAnimations()
     EngineOptim.hideOtherPlayers()
+    EngineOptim.startMemoryCleanupLoop()
+    print("[KizHub Tycoon] ❄️ ĐÃ KÍCH HOẠT CHẾ ĐỘ CPU SAVER (3D Rendering Off, Cap FPS, Mute)!")
+else
+    EngineOptim.applyAll(Config.TargetFPS or 5, Config.Blackout ~= false)
+    if Config.HidePlayers then
+        EngineOptim.hideOtherPlayers()
+    end
+end
+
+if Config.InfinitePetSpeed ~= false and TycoonFarm and type(TycoonFarm.installInfinitePetSpeed) == "function" then
+    TycoonFarm.installInfinitePetSpeed()
 end
 
 AntiAFK.installGodModeAntiAfk(Network.netFire, Config.AfkPulseInterval or 35)
@@ -482,19 +498,26 @@ task.spawn(function()
     end
 end)
 
--- LUỒNG 6: Bắt Huge / Titanic mới nở từ Trứng & Gửi Báo Cáo Discord Webhook Định Kỳ
+-- LUỒNG 6: Bắt Huge / Titanic mới nở từ Trứng, Quà Gift & Gửi Báo Cáo Discord Webhook Định Kỳ
 task.spawn(function()
     local lastStatusReport = os.clock()
+    local genv = (type(getgenv) == "function" and getgenv()) or _G
     while state.alive do
         pcall(function()
-            -- 1. Quét tìm Huge / Titanic vừa nở
-            local eventsUrl = Config.Webhook and Config.Webhook.EventsUrl
+            -- 1. Quét tìm Huge / Titanic vừa nở hoặc vừa nhận từ Gift
+            local eventsUrl = (Config.Webhook and Config.Webhook.EventsUrl)
+            if (not eventsUrl or eventsUrl == "") and genv then
+                eventsUrl = genv.EventsUrl or genv.WebhookUrl
+            end
             if eventsUrl and eventsUrl ~= "" and Webhook and type(Webhook.checkNewHugeHatched) == "function" then
                 Webhook.checkNewHugeHatched(Network.getSave, eventsUrl)
             end
 
             -- 2. Gửi báo cáo trạng thái định kỳ 30 phút
-            local statusUrl = Config.Webhook and Config.Webhook.StatusUrl
+            local statusUrl = (Config.Webhook and Config.Webhook.StatusUrl)
+            if (not statusUrl or statusUrl == "") and genv then
+                statusUrl = genv.StatusUrl or genv.WebhookUrl
+            end
             local interval = (Config.Webhook and Config.Webhook.StatusInterval) or 1800
             if statusUrl and statusUrl ~= "" and os.clock() - lastStatusReport >= interval then
                 lastStatusReport = os.clock()
@@ -520,7 +543,7 @@ task.spawn(function()
                 Webhook.sendWebhook(title, desc, 0xf59e0b, statusUrl)
             end
         end)
-        task.wait(5.0)
+        task.wait(2.0)
     end
 end)
 

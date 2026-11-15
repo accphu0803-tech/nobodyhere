@@ -532,8 +532,19 @@ function EggHatch.hatchBestEggTick(state)
         end
     end
 
-    -- Cập nhật chu kỳ mở trứng
+    -- Cập nhật chu kỳ mở trứng & Kiểm tra Webhook nổ Huge / Titanic
     if hatchedThisTick then
+        pcall(function()
+            local genv = (type(getgenv) == "function" and getgenv()) or _G
+            local eventsUrl = (Config and Config.Webhook and Config.Webhook.EventsUrl)
+            if (not eventsUrl or eventsUrl == "") and genv then
+                eventsUrl = genv.EventsUrl or genv.WebhookUrl
+            end
+            if eventsUrl and eventsUrl ~= "" and Webhook and type(Webhook.checkNewHugeHatched) == "function" then
+                Webhook.checkNewHugeHatched(Network.getSave, eventsUrl)
+            end
+        end)
+
         if infiniteFinal then
             print(string.format("[KizHub Tycoon] 🥚 [INFINITE HATCH] %s (+%d quả) • Đã mở tổng cộng: %d", targetEgg.displayName or targetEgg.eggName, allowedHatch, state.totalEggsHatched or 0))
         else

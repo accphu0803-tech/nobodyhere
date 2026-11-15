@@ -104,8 +104,9 @@ function WebhookHelper.checkNewHugeHatched(getSaveFn, eventWebhookUrl)
     if not isHugeCacheInitialized then
         for uid, p in pairs(pets) do
             if type(p) == "table" and type(p.id) == "string" then
-                local isTitanic = (p.IsTitanic and p:IsTitanic()) or (p.id:find("Titanic ") ~= nil)
-                local isHuge = (p.IsHuge and p:IsHuge()) or (p.id:find("Huge ") and not p.id:find("Huge Hunter"))
+                local lowerId = p.id:lower()
+                local isTitanic = (p.IsTitanic and p:IsTitanic()) or (lowerId:find("titanic") ~= nil)
+                local isHuge = (p.IsHuge and p:IsHuge()) or (lowerId:find("huge") ~= nil and not lowerId:find("hunter"))
                 if isHuge or isTitanic then
                     knownHugeUids[uid] = true
                 end
@@ -115,11 +116,12 @@ function WebhookHelper.checkNewHugeHatched(getSaveFn, eventWebhookUrl)
         return
     end
 
-    -- Quét tìm pet Huge / Titanic mới xuất hiện
+    -- Quét tìm pet Huge / Titanic mới xuất hiện (từ mở Trứng, mở Quà Gift, hoặc nhận từ máy)
     for uid, p in pairs(pets) do
         if type(p) == "table" and type(p.id) == "string" then
-            local isTitanic = (p.IsTitanic and p:IsTitanic()) or (p.id:find("Titanic ") ~= nil)
-            local isHuge = (p.IsHuge and p:IsHuge()) or (p.id:find("Huge ") and not p.id:find("Huge Hunter"))
+            local lowerId = p.id:lower()
+            local isTitanic = (p.IsTitanic and p:IsTitanic()) or (lowerId:find("titanic") ~= nil)
+            local isHuge = (p.IsHuge and p:IsHuge()) or (lowerId:find("huge") ~= nil and not lowerId:find("hunter"))
 
             if (isHuge or isTitanic) and not knownHugeUids[uid] then
                 knownHugeUids[uid] = true
@@ -130,7 +132,7 @@ function WebhookHelper.checkNewHugeHatched(getSaveFn, eventWebhookUrl)
                     -- Nổ Siêu Phẩm Titanic: Embed Tím Cực Hiếm
                     WebhookHelper.sendWebhook(
                         "👑👑 [NỔ SIÊU PHẨM TITANIC THÀNH CÔNG] 👑👑",
-                        string.format("Người chơi: **%s**\n🌟 Siêu Phẩm: **%s**\nUID: `%s`", playerName, pName, tostring(uid)),
+                        string.format("Người chơi: **%s**\n🌟 Siêu Phẩm Titanic: **%s**\nUID: `%s`\nThời gian: <t:%d:R>", playerName, pName, tostring(uid), os.time()),
                         0x9B59B6,
                         targetUrl
                     )
@@ -138,7 +140,7 @@ function WebhookHelper.checkNewHugeHatched(getSaveFn, eventWebhookUrl)
                     -- Nổ Huge: Embed Vàng Hoàng Kim
                     WebhookHelper.sendWebhook(
                         "💥 [NỔ HUGE PET THÀNH CÔNG] 💥",
-                        string.format("Người chơi: **%s**\nPet nhận được: **%s**\nUID: `%s`", playerName, pName, tostring(uid)),
+                        string.format("Người chơi: **%s**\nPet nhận được: **%s**\nUID: `%s`\nThời gian: <t:%d:R>", playerName, pName, tostring(uid), os.time()),
                         0xFFD700,
                         targetUrl
                     )

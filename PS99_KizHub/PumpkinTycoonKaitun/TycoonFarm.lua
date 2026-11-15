@@ -68,6 +68,51 @@ function TycoonFarm.init(deps)
     inEventFn = deps.inEvent
     instanceModelFn = deps.instanceModel
     initGameLibs()
+
+    if Config and Config.InfinitePetSpeed ~= false then
+        TycoonFarm.installInfinitePetSpeed()
+    end
+end
+
+-- =========================================================================
+-- 0. INFINITE PET SPEED (DI CHUYỂN SIÊU TỐC TỨC THÌ ĐẬP QUẶNG & BÍ NGÔ)
+-- =========================================================================
+
+local isPetSpeedInstalled = false
+function TycoonFarm.installInfinitePetSpeed()
+    if isPetSpeedInstalled then return end
+    isPetSpeedInstalled = true
+
+    task.spawn(function()
+        local mult = (Config and Config.PetSpeedMultiplier) or 999999
+        for attempt = 1, 30 do
+            local hooked = false
+            pcall(function()
+                initGameLibs()
+                local pp = (Modules and Modules.G and Modules.G.PlayerPet) or PlayerPet or safeRequire({ "Library", "Client", "PlayerPet" })
+                if type(pp) == "table" and type(pp.CalculateSpeedMultiplier) == "function" then
+                    if type(hookfunction) == "function" then
+                        local orig = nil
+                        orig = hookfunction(pp.CalculateSpeedMultiplier, function(...)
+                            return mult
+                        end)
+                        hooked = true
+                    else
+                        pp.CalculateSpeedMultiplier = function(...)
+                            return mult
+                        end
+                        hooked = true
+                    end
+                end
+            end)
+
+            if hooked then
+                print(string.format("[KizHub Tycoon] ⚡ ĐÃ KÍCH HOẠT INFINITE PET SPEED (Multiplier: %s)!", tostring(mult)))
+                break
+            end
+            task.wait(1.0)
+        end
+    end)
 end
 
 -- =========================================================================

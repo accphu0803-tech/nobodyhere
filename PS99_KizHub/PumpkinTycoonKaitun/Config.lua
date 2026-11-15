@@ -9,10 +9,27 @@ local genv = (type(getgenv) == "function" and getgenv()) or _G
 local Config = {
     -- Cài đặt chung & Hiệu năng
     Enabled = true,
+    CPUSaver = true,            -- [CPU Saver]: Giảm tải CPU/GPU cực đại cho dàn acc (3D Rendering Off, Cap FPS, Mute)
     TargetFPS = 5,
     Blackout = true,
     HidePlayers = true,
     AfkPulseInterval = 35,
+
+    -- Tốc độ Pet siêu tốc (Infinite Pet Speed)
+    InfinitePetSpeed = true,    -- [Infinite Pet Speed]: Hook CalculateSpeedMultiplier 999999 di chuyển và tiếp cận quặng/bí ngô tức thì
+    PetSpeedMultiplier = 999999,
+
+    -- Tự động sử dụng Buffs (Trái cây, Bình thuốc, Đồ chơi) - TUYỆT ĐỐI KHÔNG CẮM CỜ
+    AutoBuffs = {
+        Enabled = true,
+        Fruits = true,          -- Tự động ăn Fruit (Apple, Banana, Orange, Rainbow...) tối đa 20 quả/lần
+        Potions = true,         -- Tự động uống Potions (Damage, Coins, Luck, Speed, Treasure, Lightning...)
+        Toys = true,            -- Tự động kích hoạt Đồ chơi (Toy Ball, Toy Bone, Squeaky Toy)
+        NoFlags = true,         -- TUYỆT ĐỐI KHÔNG CẮM CỜ (Event này cấm cắm cờ)
+        FruitInterval = 60,
+        PotionInterval = 90,
+        ToyInterval = 180,
+    },
 
     -- Chế độ di chuyển: "Rage" = Teleport tức thì; "Legit" = Pathfinding né nước & nhảy chướng ngại
     MovementMode = "Rage",
@@ -104,9 +121,11 @@ local Config = {
     -- Discord Webhook
     Webhook = {
         Enabled = true,
-        EventsUrl = "",
-        StatusUrl = "",
+        EventsUrl = genv.EventsUrl or genv.WebhookUrl or "",
+        StatusUrl = genv.StatusUrl or genv.WebhookUrl or "",
         StatusInterval = 1800,
+        NotifyHuge = true,
+        NotifyTitanic = true,
     },
 }
 
