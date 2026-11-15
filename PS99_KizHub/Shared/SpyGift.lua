@@ -1,38 +1,29 @@
 -- =========================================================================
--- PS99_KizHub/Shared/SpyGift.lua
--- REMOTE SPY CHUYÊN DỤNG BẮT HÀNH ĐỘNG MỞ GIFT & LOOTBOX TRONG PET SIMULATOR 99
--- Tác giả: VANTA [JHON369] | Thiết kế riêng cho dj
--- Hướng dẫn:
---   1. Chạy script này trên executor (Volt, Wave, Delta, Hydrogen, Solara...)
---   2. Một bảng GUI tím nổi sẽ xuất hiện trên màn hình.
---   3. Mở túi đồ (Inventory) và tự tay click mở 1 hộp quà Flannel Gift hoặc Gift bất kỳ.
---   4. Remote và toàn bộ tham số sẽ được bắt tức thì, tự động copy vào Clipboard
---      và hiển thị trên GUI + Console (F9).
---   5. Gửi lại kết quả copy cho VANTA để map vào script chính!
+-- PS99_KizHub/Shared/SpyGift.lua (V2 - TRIPLE HOOK + ALL-CAPTURE + GUI TRACKER)
+-- Tác giả: VANTA [JHON369] | Dành riêng cho dj
+-- Các nâng cấp v2:
+--   1. Mặc định BẮT TẤT CẢ REMOTE (Không lọc từ khóa, bất kỳ remote nào gọi cũng hiện ngay)
+--   2. Triple-Hook: Hook __namecall + Hook C-closure (InvokeServer / FireServer) + Hook Library.Network
+--   3. GUI Click Tracker: Ghi lại chính xác nút nào trong túi đồ / popup được bấm
+--   4. Highlight màu nổi bật riêng cho các lệnh chứa: Gift, Lootbox, Open, Item, Consumable
 -- =========================================================================
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
 
--- Multi-executor clipboard support
 local setclip = setclipboard or toclipboard or (Clipboard and Clipboard.set) or function(...) end
 local getgenvFn = (type(getgenv) == "function" and getgenv) or function() return _G end
 
--- Gỡ bỏ GUI cũ nếu đang chạy
 if getgenvFn()._GiftSpyGui then
     pcall(function() getgenvFn()._GiftSpyGui:Destroy() end)
     getgenvFn()._GiftSpyGui = nil
 end
 
--- =========================================================================
--- 1. HÀM CHUYỂN ĐỔI THAM SỐ AN TOÀN TUYỆT ĐỐI (KHÔNG CRASH)
--- =========================================================================
 local function safeSerialize(val, depth, visited)
     depth = depth or 0
     visited = visited or {}
@@ -46,13 +37,13 @@ local function safeSerialize(val, depth, visited)
     elseif t == "nil" then
         return "nil"
     elseif t == "Instance" then
-        local fullName = pcall(function() return val:GetFullName() end) and val:GetFullName() or tostring(val)
-        return string.format("game.%s", fullName)
+        local ok, fn = pcall(function() return val:GetFullName() end)
+        return ok and string.format("game.%s", fn) or tostring(val)
     elseif t == "Vector3" then
-        return string.format("Vector3.new(%.2f, %.2f, %.2f)", val.X, val.Y, val.Z)
+        return string.format("Vector3.new(%.1f, %.1f, %.1f)", val.X, val.Y, val.Z)
     elseif t == "CFrame" then
         local p = val.Position
-        return string.format("CFrame.new(%.2f, %.2f, %.2f)", p.X, p.Y, p.Z)
+        return string.format("CFrame.new(%.1f, %.1f, %.1f)", p.X, p.Y, p.Z)
     elseif t == "table" then
         if visited[val] then return "<CircularTable>" end
         visited[val] = true
@@ -63,13 +54,13 @@ local function safeSerialize(val, depth, visited)
         for k, _ in pairs(val) do
             count = count + 1
             if type(k) ~= "number" or k ~= count then isArray = false end
-            if count > 12 then table.insert(parts, "..."); break end
+            if count > 15 then table.insert(parts, "..."); break end
         end
 
         local cur = 0
         for k, v in pairs(val) do
             cur = cur + 1
-            if cur > 12 then break end
+            if cur > 15 then break end
             local vStr = safeSerialize(v, depth + 1, visited)
             if isArray then
                 table.insert(parts, vStr)
@@ -85,30 +76,25 @@ local function safeSerialize(val, depth, visited)
 end
 
 -- =========================================================================
--- 2. TẠO GIAO DIỆN SPY UI NỔI TRÊN MÀN HÌNH
+-- GIAO DIỆN SPY
 -- =========================================================================
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "KizHub_GiftSpy_Safe"
+ScreenGui.Name = "KizHub_GiftSpy_V2"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 pcall(function()
-    if gethui then
-        ScreenGui.Parent = gethui()
-    elseif syn and syn.protect_gui then
-        syn.protect_gui(ScreenGui)
-        ScreenGui.Parent = CoreGui
-    else
-        ScreenGui.Parent = CoreGui
-    end
+    if gethui then ScreenGui.Parent = gethui()
+    elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui); ScreenGui.Parent = CoreGui
+    else ScreenGui.Parent = CoreGui end
 end)
 if not ScreenGui.Parent then ScreenGui.Parent = PlayerGui end
 getgenvFn()._GiftSpyGui = ScreenGui
 
 local MainFrame = Instance.new("Frame", ScreenGui)
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 560, 0, 420)
-MainFrame.Position = UDim2.new(0.5, -280, 0.5, -210)
+MainFrame.Size = UDim2.new(0, 580, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -290, 0.5, -210)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -119,7 +105,6 @@ local Stroke = Instance.new("UIStroke", MainFrame)
 Stroke.Color = Color3.fromRGB(168, 85, 247)
 Stroke.Thickness = 1.5
 
--- Header
 local Header = Instance.new("Frame", MainFrame)
 Header.Name = "Header"
 Header.Size = UDim2.new(1, 0, 0, 38)
@@ -128,7 +113,7 @@ Header.BorderSizePixel = 0
 Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 10)
 
 local Title = Instance.new("TextLabel", Header)
-Title.Text = "🎁 KizHub | Gift & Lootbox Remote Spy (VANTA)"
+Title.Text = "🎁 KizHub Gift Spy V2 (BẮT TẤT CẢ REMOTE & CLICK)"
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 13
 Title.TextColor3 = Color3.fromRGB(216, 180, 254)
@@ -148,10 +133,9 @@ CloseBtn.BackgroundColor3 = Color3.fromRGB(51, 25, 35)
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
--- Status Box
 local StatusLabel = Instance.new("TextLabel", MainFrame)
 StatusLabel.Name = "StatusLabel"
-StatusLabel.Text = "📡 Đang lắng nghe... Hãy vào Inventory và mở 1 hộp quà Flannel Gift!"
+StatusLabel.Text = "⚡ Đang bắt TẤT CẢ lệnh mạng... Hãy mở hộp quà trong túi đồ!"
 StatusLabel.Font = Enum.Font.GothamMedium
 StatusLabel.TextSize = 11
 StatusLabel.TextColor3 = Color3.fromRGB(52, 211, 153)
@@ -160,40 +144,10 @@ StatusLabel.Size = UDim2.new(1, -24, 0, 20)
 StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 StatusLabel.BackgroundTransparency = 1
 
--- Filter Settings Bar
-local FilterBar = Instance.new("Frame", MainFrame)
-FilterBar.Name = "FilterBar"
-FilterBar.Size = UDim2.new(1, -24, 0, 26)
-FilterBar.Position = UDim2.new(0, 12, 0, 64)
-FilterBar.BackgroundColor3 = Color3.fromRGB(20, 29, 47)
-Instance.new("UICorner", FilterBar).CornerRadius = UDim.new(0, 6)
-
-local FilterLabel = Instance.new("TextLabel", FilterBar)
-FilterLabel.Text = "Bộ lọc từ khóa:"
-FilterLabel.Font = Enum.Font.GothamBold
-FilterLabel.TextSize = 10
-FilterLabel.TextColor3 = Color3.fromRGB(148, 163, 184)
-FilterLabel.Position = UDim2.new(0, 8, 0, 0)
-FilterLabel.Size = UDim2.new(0, 85, 1, 0)
-FilterLabel.TextXAlignment = Enum.TextXAlignment.Left
-FilterLabel.BackgroundTransparency = 1
-
-local FilterInput = Instance.new("TextBox", FilterBar)
-FilterInput.Text = "gift,lootbox,box,open,flannel,use,consume,item,redeem,reward,tycoon"
-FilterInput.ClearTextOnFocus = false
-FilterInput.Font = Enum.Font.Code
-FilterInput.TextSize = 10
-FilterInput.TextColor3 = Color3.fromRGB(56, 189, 248)
-FilterInput.Position = UDim2.new(0, 95, 0, 2)
-FilterInput.Size = UDim2.new(1, -100, 1, -4)
-FilterInput.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
-Instance.new("UICorner", FilterInput).CornerRadius = UDim.new(0, 4)
-
--- Log Scroll Area
 local LogScroll = Instance.new("ScrollingFrame", MainFrame)
 LogScroll.Name = "LogScroll"
-LogScroll.Position = UDim2.new(0, 12, 0, 96)
-LogScroll.Size = UDim2.new(1, -24, 1, -150)
+LogScroll.Position = UDim2.new(0, 12, 0, 66)
+LogScroll.Size = UDim2.new(1, -24, 1, -118)
 LogScroll.BackgroundColor3 = Color3.fromRGB(10, 14, 26)
 LogScroll.BorderSizePixel = 0
 LogScroll.ScrollBarThickness = 5
@@ -203,7 +157,7 @@ Instance.new("UICorner", LogScroll).CornerRadius = UDim.new(0, 6)
 
 local LogListLayout = Instance.new("UIListLayout", LogScroll)
 LogListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-LogListLayout.Padding = UDim.new(0, 4)
+LogListLayout.Padding = UDim.new(0, 3)
 
 local LogPadding = Instance.new("UIPadding", LogScroll)
 LogPadding.PaddingTop = UDim.new(0, 6)
@@ -211,10 +165,9 @@ LogPadding.PaddingBottom = UDim.new(0, 6)
 LogPadding.PaddingLeft = UDim.new(0, 8)
 LogPadding.PaddingRight = UDim.new(0, 8)
 
--- Footer Controls
 local BtnContainer = Instance.new("Frame", MainFrame)
-BtnContainer.Position = UDim2.new(0, 12, 1, -46)
-BtnContainer.Size = UDim2.new(1, -24, 0, 36)
+BtnContainer.Position = UDim2.new(0, 12, 1, -44)
+BtnContainer.Size = UDim2.new(1, -24, 0, 34)
 BtnContainer.BackgroundTransparency = 1
 
 local function createBtn(text, xPos, width, color, callback)
@@ -233,95 +186,131 @@ end
 
 local lastCapturedCommand = ""
 local allLogs = {}
-local captureModeAll = false
 
-local function addLog(text, codeToCopy, color)
-    local line = string.format("[%s] %s", os.date("%H:%M:%S"), text)
-    print("[GiftSpy] " .. line)
-    table.insert(allLogs, line .. (codeToCopy and ("\n  --> " .. codeToCopy) or ""))
+-- Bỏ qua các remote rác spam màn hình
+local IGNORED_REMOTES = {
+    ["Ping"] = true,
+    ["GetPing"] = true,
+    ["Framework: Ping"] = true,
+    ["Idle Tracking: Heartbeat"] = true,
+    ["Orbs: Collect"] = true,
+    ["Breakables_PlayerDealDamage"] = true,
+    ["AutoFarm_LogPosition"] = true,
+}
+
+local function addLog(prefix, rName, method, argsJoined, codePayload, isGift)
+    if IGNORED_REMOTES[rName] then return end
+
+    local timeStr = os.date("%H:%M:%S")
+    local displayLine = string.format("[%s] %s %s:%s(%s)", timeStr, prefix, rName, method, argsJoined)
+    print("[GiftSpy] " .. displayLine)
+    table.insert(allLogs, displayLine .. (codePayload and ("\n  --> " .. codePayload) or ""))
 
     local row = Instance.new("TextButton", LogScroll)
-    row.Text = line
+    row.Text = displayLine
     row.Font = Enum.Font.Code
     row.TextSize = 10
-    row.TextColor3 = color or Color3.fromRGB(224, 231, 255)
     row.TextXAlignment = Enum.TextXAlignment.Left
     row.TextWrapped = true
     row.Size = UDim2.new(1, 0, 0, 0)
     row.AutomaticSize = Enum.AutomaticSize.Y
     row.BackgroundTransparency = 1
 
-    if codeToCopy then
+    if isGift then
+        row.TextColor3 = Color3.fromRGB(250, 204, 21) -- Vàng sáng nổi bật
+        StatusLabel.Text = "🎯 ĐÃ BẮT ĐƯỢC GIFT: " .. rName .. " (Đã auto-copy!)"
+        lastCapturedCommand = codePayload or displayLine
+        pcall(function() setclip(lastCapturedCommand) end)
+    else
+        row.TextColor3 = Color3.fromRGB(148, 163, 184) -- Xám nhạt cho remote thường
+    end
+
+    if codePayload then
         row.MouseButton1Click:Connect(function()
-            setclip(codeToCopy)
-            StatusLabel.Text = "📋 Đã copy lệnh này vào Clipboard!"
+            setclip(codePayload)
+            StatusLabel.Text = "📋 Đã copy lệnh: " .. rName
         end)
     end
 
     local children = LogScroll:GetChildren()
-    if #children > 150 then
-        children[3]:Destroy()
-    end
-    task.defer(function()
-        LogScroll.CanvasPosition = Vector2.new(0, 999999)
-    end)
+    if #children > 200 then children[3]:Destroy() end
+    task.defer(function() LogScroll.CanvasPosition = Vector2.new(0, 999999) end)
 end
 
 -- =========================================================================
--- 3. HOOK __NAMECALL & TÌM REMOTE THÔNG MINH
+-- HOOK 1: __NAMECALL TRÊN GAME
 -- =========================================================================
-local function isMatchFilter(name, argsStr)
-    if captureModeAll then return true end
-    local query = FilterInput.Text:lower()
-    local target = (name .. " " .. argsStr):lower()
-    for word in query:gmatch("[^,;|%s]+") do
-        if word ~= "" and target:find(word, 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
 pcall(function()
-    if type(hookmetamethod) ~= "function" then
-        addLog("⚠️ Executor không hỗ trợ hookmetamethod! Hãy thử dùng Volt / Wave / Delta.", nil, Color3.fromRGB(239, 68, 68))
-        return
-    end
-
+    if type(hookmetamethod) ~= "function" then return end
     local oldNamecall = nil
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
-        
         if (method == "InvokeServer" or method == "FireServer") and typeof(self) == "Instance" then
             local rName = self.Name
             local rawArgs = { ... }
-
             task.spawn(function()
                 local formatted = {}
-                for _, a in ipairs(rawArgs) do
-                    table.insert(formatted, safeSerialize(a))
-                end
+                for _, a in ipairs(rawArgs) do table.insert(formatted, safeSerialize(a)) end
                 local argsJoined = table.concat(formatted, ", ")
+                local codePayload = string.format("game:GetService(\"ReplicatedStorage\").Network[%q]:%s(%s)", rName, method, argsJoined)
 
-                if isMatchFilter(rName, argsJoined) then
-                    local codePayload = string.format("game:GetService(\"ReplicatedStorage\").Network[%q]:%s(%s)", rName, method, argsJoined)
-                    local displayLine = string.format("[%s] %s(%s)", method, rName, argsJoined)
-
-                    lastCapturedCommand = codePayload
-                    addLog(displayLine, codePayload, Color3.fromRGB(244, 114, 182))
-                    StatusLabel.Text = "🎯 ĐÃ BẮT ĐƯỢC REMOTE: " .. rName .. " (Đã auto-copy!)"
-                    pcall(function() setclip(codePayload) end)
-                end
+                local fullStr = (rName .. " " .. argsJoined):lower()
+                local isGift = fullStr:find("gift") or fullStr:find("box") or fullStr:find("flannel") or fullStr:find("open") or fullStr:find("loot") or fullStr:find("item") or fullStr:find("consume")
+                addLog("[Namecall]", rName, method, argsJoined, codePayload, isGift)
             end)
         end
-
         return oldNamecall(self, ...)
     end))
-
-    addLog("✓ Đã cài đặt Safe Hook __namecall (Bảo toàn 100% dữ liệu game)", nil, Color3.fromRGB(56, 189, 248))
 end)
 
--- Hook phụ vào Network module nếu có thể (để bắt kể cả khi game dùng custom wrapper)
+-- =========================================================================
+-- HOOK 2: HOOKFUNCTION TRÊN INVOKESERVER & FIRESERVER (CHỐNG BYPASS . vs :)
+-- =========================================================================
+pcall(function()
+    if type(hookfunction) ~= "function" then return end
+
+    local dummyFunc = Instance.new("RemoteFunction")
+    local oldInvokeServer = nil
+    oldInvokeServer = hookfunction(dummyFunc.InvokeServer, newcclosure(function(self, ...)
+        if typeof(self) == "Instance" then
+            local rName = self.Name
+            local rawArgs = { ... }
+            task.spawn(function()
+                local formatted = {}
+                for _, a in ipairs(rawArgs) do table.insert(formatted, safeSerialize(a)) end
+                local argsJoined = table.concat(formatted, ", ")
+                local code = string.format("game:GetService(\"ReplicatedStorage\").Network[%q]:InvokeServer(%s)", rName, argsJoined)
+                local fullStr = (rName .. " " .. argsJoined):lower()
+                local isGift = fullStr:find("gift") or fullStr:find("box") or fullStr:find("flannel") or fullStr:find("open") or fullStr:find("loot") or fullStr:find("item") or fullStr:find("consume")
+                addLog("[FuncInvoke]", rName, "InvokeServer", argsJoined, code, isGift)
+            end)
+        end
+        return oldInvokeServer(self, ...)
+    end))
+
+    local dummyEvent = Instance.new("RemoteEvent")
+    local oldFireServer = nil
+    oldFireServer = hookfunction(dummyEvent.FireServer, newcclosure(function(self, ...)
+        if typeof(self) == "Instance" then
+            local rName = self.Name
+            local rawArgs = { ... }
+            task.spawn(function()
+                local formatted = {}
+                for _, a in ipairs(rawArgs) do table.insert(formatted, safeSerialize(a)) end
+                local argsJoined = table.concat(formatted, ", ")
+                local code = string.format("game:GetService(\"ReplicatedStorage\").Network[%q]:FireServer(%s)", rName, argsJoined)
+                local fullStr = (rName .. " " .. argsJoined):lower()
+                local isGift = fullStr:find("gift") or fullStr:find("box") or fullStr:find("flannel") or fullStr:find("open") or fullStr:find("loot") or fullStr:find("item") or fullStr:find("consume")
+                addLog("[FuncFire]", rName, "FireServer", argsJoined, code, isGift)
+            end)
+        end
+        return oldFireServer(self, ...)
+    end))
+end)
+
+-- =========================================================================
+-- HOOK 3: HOOK TRỰC TIẾP VÀO TABLE CLIENT.NETWORK CỦA GAME
+-- =========================================================================
 pcall(function()
     local NetModule = RS:FindFirstChild("Network", true) or (RS:FindFirstChild("Library") and RS.Library:FindFirstChild("Client") and RS.Library.Client:FindFirstChild("Network"))
     if NetModule and type(require) == "function" then
@@ -335,12 +324,10 @@ pcall(function()
                         local formatted = {}
                         for _, a in ipairs(rawArgs) do table.insert(formatted, safeSerialize(a)) end
                         local argsJoined = table.concat(formatted, ", ")
-                        if isMatchFilter(tostring(name), argsJoined) then
-                            local code = string.format("Network.Invoke(%q, %s)", tostring(name), argsJoined)
-                            lastCapturedCommand = code
-                            addLog("[Network.Invoke] " .. tostring(name) .. "(" .. argsJoined .. ")", code, Color3.fromRGB(52, 211, 153))
-                            pcall(function() setclip(code) end)
-                        end
+                        local code = string.format("Network.Invoke(%q, %s)", tostring(name), argsJoined)
+                        local fullStr = (tostring(name) .. " " .. argsJoined):lower()
+                        local isGift = fullStr:find("gift") or fullStr:find("box") or fullStr:find("flannel") or fullStr:find("open") or fullStr:find("loot") or fullStr:find("item") or fullStr:find("consume")
+                        addLog("[Net.Invoke]", tostring(name), "Invoke", argsJoined, code, isGift)
                     end)
                     return oldInv(name, ...)
                 end
@@ -353,12 +340,10 @@ pcall(function()
                         local formatted = {}
                         for _, a in ipairs(rawArgs) do table.insert(formatted, safeSerialize(a)) end
                         local argsJoined = table.concat(formatted, ", ")
-                        if isMatchFilter(tostring(name), argsJoined) then
-                            local code = string.format("Network.Fire(%q, %s)", tostring(name), argsJoined)
-                            lastCapturedCommand = code
-                            addLog("[Network.Fire] " .. tostring(name) .. "(" .. argsJoined .. ")", code, Color3.fromRGB(52, 211, 153))
-                            pcall(function() setclip(code) end)
-                        end
+                        local code = string.format("Network.Fire(%q, %s)", tostring(name), argsJoined)
+                        local fullStr = (tostring(name) .. " " .. argsJoined):lower()
+                        local isGift = fullStr:find("gift") or fullStr:find("box") or fullStr:find("flannel") or fullStr:find("open") or fullStr:find("loot") or fullStr:find("item") or fullStr:find("consume")
+                        addLog("[Net.Fire]", tostring(name), "Fire", argsJoined, code, isGift)
                     end)
                     return oldFire(name, ...)
                 end
@@ -368,52 +353,77 @@ pcall(function()
 end)
 
 -- =========================================================================
--- 4. CÁC NÚT ĐIỀU KHIỂN DƯỚI FOOTER
+-- HOOK 4: GUI CLICK TRACKER (BẮT CLICK NÚT MỞ HOẶC POPUP MỞ QUÀ)
 -- =========================================================================
--- Nút 1: Copy Remote mới nhất
-createBtn("📋 Copy Lệnh Mới", 0, 130, Color3.fromRGB(37, 99, 235), function()
+pcall(function()
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            local mousePos = UserInputService:GetMouseLocation()
+            task.defer(function()
+                pcall(function()
+                    for _, gui in ipairs(PlayerGui:GetChildren()) do
+                        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "KizHub_GiftSpy_V2" then
+                            for _, desc in ipairs(gui:GetDescendants()) do
+                                if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+                                    local ap = desc.AbsolutePosition
+                                    local as = desc.AbsoluteSize
+                                    if mousePos.X >= ap.X and mousePos.X <= ap.X + as.X
+                                       and mousePos.Y >= ap.Y and mousePos.Y <= ap.Y + as.Y then
+                                        
+                                        local bText = (desc:IsA("TextButton") and desc.Text) or "(ImageButton)"
+                                        local pName = desc.Parent and desc.Parent.Name or ""
+                                        local line = string.format("[CLICK GUI] Nút: %q (Text: %q) | Cha: %q", desc.Name, bText, pName)
+                                        print("[GiftSpy] " .. line)
+                                        local row = Instance.new("TextButton", LogScroll)
+                                        row.Text = string.format("[%s] %s", os.date("%H:%M:%S"), line)
+                                        row.Font = Enum.Font.Code
+                                        row.TextSize = 10
+                                        row.TextColor3 = Color3.fromRGB(56, 189, 248)
+                                        row.TextXAlignment = Enum.TextXAlignment.Left
+                                        row.TextWrapped = true
+                                        row.Size = UDim2.new(1, 0, 0, 0)
+                                        row.AutomaticSize = Enum.AutomaticSize.Y
+                                        row.BackgroundTransparency = 1
+                                        table.insert(allLogs, line)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end)
+            end)
+        end
+    end)
+end)
+
+-- =========================================================================
+-- NÚT BẤM FOOTER
+-- =========================================================================
+createBtn("📋 Copy Lệnh Vàng", 0, 140, Color3.fromRGB(37, 99, 235), function()
     if lastCapturedCommand ~= "" then
         setclip(lastCapturedCommand)
-        StatusLabel.Text = "📋 Đã copy lệnh mới nhất vào Clipboard!"
+        StatusLabel.Text = "📋 Đã copy lệnh màu vàng vào Clipboard!"
     else
-        StatusLabel.Text = "⚠️ Chưa bắt được lệnh nào!"
+        StatusLabel.Text = "⚠️ Chưa có lệnh quà (màu vàng) nào!"
     end
 end)
 
--- Nút 2: Copy Toàn Bộ Log
-createBtn("📑 Copy All Logs", 136, 120, Color3.fromRGB(147, 51, 234), function()
+createBtn("📑 Copy Toàn Bộ Log", 148, 140, Color3.fromRGB(147, 51, 234), function()
     if #allLogs > 0 then
         local fullText = table.concat(allLogs, "\n")
         setclip(fullText)
-        StatusLabel.Text = string.format("📑 Đã copy toàn bộ %d logs vào Clipboard!", #allLogs)
+        StatusLabel.Text = string.format("📑 Đã copy toàn bộ %d dòng log vào Clipboard!", #allLogs)
     else
         StatusLabel.Text = "⚠️ Danh sách log trống!"
     end
 end)
 
--- Nút 3: Toggle Bắt Tất Cả (All vs Filtered)
-local toggleModeBtn = createBtn("🔍 Chế Độ: Lọc", 262, 125, Color3.fromRGB(16, 185, 129), function() end)
-toggleModeBtn.MouseButton1Click:Connect(function()
-    captureModeAll = not captureModeAll
-    if captureModeAll then
-        toggleModeBtn.Text = "⚡ Chế Độ: BẮT TẤT CẢ"
-        toggleModeBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
-        StatusLabel.Text = "⚡ Đang bắt TẤT CẢ remote (không lọc từ khóa)"
-    else
-        toggleModeBtn.Text = "🔍 Chế Độ: LỌC"
-        toggleModeBtn.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
-        StatusLabel.Text = "🔍 Đang lọc theo từ khóa: " .. FilterInput.Text
-    end
-end)
-
--- Nút 4: Xóa Log
-createBtn("🗑️ Xóa Log", 393, 80, Color3.fromRGB(71, 85, 105), function()
+createBtn("🗑️ Xóa Log", 296, 90, Color3.fromRGB(71, 85, 105), function()
     allLogs = {}
     for _, child in ipairs(LogScroll:GetChildren()) do
         if child:IsA("TextButton") then child:Destroy() end
     end
-    StatusLabel.Text = "📡 Đã xóa sạch log. Sẵn sàng bắt tiếp!"
+    StatusLabel.Text = "📡 Đã xóa sạch log."
 end)
 
-addLog("SẴN SÀNG! Remote Spy đã kích hoạt.", nil, Color3.fromRGB(52, 211, 153))
-addLog("Bây giờ bạn mở túi đồ và mở Flannel Gift, remote sẽ tự động hiện ở đây và copy vào Clipboard!", nil, Color3.fromRGB(224, 231, 255))
+print("[GiftSpy] Sẵn sàng v2! Không lọc, bắt toàn bộ.")
