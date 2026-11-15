@@ -42,17 +42,17 @@ local Config = {
 
     -- Mua nút Tycoon & Nhận thưởng đảo
     AutoBuyButtons = true,
-    ButtonBuyInterval = 1.5,
+    ButtonBuyInterval = 2.0,
     AutoClaimIslandReward = true,
 
     -- Mở Trứng Custom tốt nhất
     AutoHatchBestEgg = true,
     HatchDelay = 1.0,
 
-    -- Auto Click / Gõ quặng
+    -- Auto Click / Gõ quặng (giãn cách 1.5s tối ưu CPU)
     AutoTap = {
         Enabled = true,
-        TapDelay = 0.2,
+        TapDelay = 1.5,
     },
 
     -- Nâng cấp máy Upgrade Machine

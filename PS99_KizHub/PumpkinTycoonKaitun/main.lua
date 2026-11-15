@@ -427,7 +427,7 @@ task.spawn(function()
                 end
             end
         end)
-        task.wait(1.0)
+        task.wait(3.0)
     end
 end)
 
@@ -435,7 +435,7 @@ end)
 -- 5. CÁC TIẾN TRÌNH VẬN HÀNH ĐỒNG THỜI (CONCURRENT WORKERS)
 -- =========================================================================
 
--- LUỒNG 1: Farm bãi patch cao nhất + Mở trứng Custom (để cơ chế game tự điều phối pet đánh quái)
+-- LUỒNG 1: Farm bãi patch cao nhất + Mở trứng Custom (giãn cách 0.35s tối ưu CPU)
 task.spawn(function()
     while state.alive do
         pcall(function()
@@ -450,7 +450,7 @@ task.spawn(function()
             -- 2. Mở trứng Custom cao nhất từ xa (tại sweet spot)
             EggHatch.hatchBestEggTick(state)
         end)
-        task.wait(0.1)
+        task.wait(0.35)
     end
 end)
 
@@ -467,11 +467,11 @@ task.spawn(function()
             TycoonFarm.checkAndBuyButtons(state)
             TycoonFarm.collectOrbsTick()
         end)
-        task.wait(Config.ButtonBuyInterval or 1.5)
+        task.wait(Config.ButtonBuyInterval or 2.0)
     end
 end)
 
--- LUỒNG 3: Auto-Tap gõ quặng xung quanh
+-- LUỒNG 3: Auto-Tap gõ quặng xung quanh (giãn cách 1.5s siêu nhẹ CPU)
 task.spawn(function()
     while state.alive do
         pcall(function()
@@ -479,7 +479,7 @@ task.spawn(function()
                 TycoonFarm.runAutoTapTick()
             end
         end)
-        task.wait(Config.AutoTap and Config.AutoTap.TapDelay or 0.2)
+        task.wait(Config.AutoTap and Config.AutoTap.TapDelay or 1.5)
     end
 end)
 

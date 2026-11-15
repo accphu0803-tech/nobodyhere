@@ -63,9 +63,23 @@ function EngineOptim.purgeHeavyVisuals()
         for _, obj in ipairs(workspace:GetDescendants()) do
             if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
                 obj.Enabled = false
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+            elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SurfaceAppearance") then
                 obj.Transparency = 1
+            elseif obj:IsA("BasePart") then
+                obj.Material = Enum.Material.SmoothPlastic
+                obj.Reflectance = 0
+                obj.CastShadow = false
             end
+        end
+    end)
+
+    pcall(function()
+        local terrain = workspace:FindFirstChildOfClass("Terrain")
+        if terrain then
+            terrain.WaterWaveSize = 0
+            terrain.WaterWaveSpeed = 0
+            terrain.WaterReflectance = 0
+            terrain.WaterTransparency = 0
         end
     end)
 
@@ -74,10 +88,24 @@ function EngineOptim.purgeHeavyVisuals()
         if things then
             -- TUYỆT ĐỐI KHÔNG xóa folder Pets hoặc Highlight của Pets (tránh lỗi Infinite yield trên PetCmds và tự tháo pet)
             local pets = things:FindFirstChild("Pets")
-            if pets and not pets:FindFirstChild("Highlight") then
-                local hl = Instance.new("Highlight")
-                hl.Name = "Highlight"
-                hl.Parent = pets
+            if pets then
+                if not pets:FindFirstChild("Highlight") then
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "Highlight"
+                    hl.Parent = pets
+                end
+                -- Ẩn đồ họa mô hình Pet để triệt tiêu tải GPU/CPU
+                for _, p in ipairs(pets:GetChildren()) do
+                    for _, part in ipairs(p:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            part.Transparency = 1
+                            part.CanCollide = false
+                            part.CastShadow = false
+                        elseif part:IsA("Decal") or part:IsA("Texture") then
+                            part.Transparency = 1
+                        end
+                    end
+                end
             end
 
             -- TUYỆT ĐỐI KHÔNG xóa folder Orbs để tránh triệt tiêu ngọc trước khi bot hút kịp
@@ -88,7 +116,71 @@ function EngineOptim.purgeHeavyVisuals()
                 end
             end
         end
-        -- Không can thiệp __DEBRIS tránh xung đột locked parent với ArrowPointer3D
+    end)
+end
+
+-- Tối ưu hóa tính toán vật lý của Humanoid nhân vật
+function EngineOptim.optimizeHumanoid()
+    pcall(function()
+        local char = LocalPlayer and LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            for _, s in ipairs({
+                Enum.HumanoidStateType.Climbing,
+                Enum.HumanoidStateType.FallingDown,
+                Enum.HumanoidStateType.Ragdoll,
+                Enum.HumanoidStateType.Swimming,
+                Enum.HumanoidStateType.Seated,
+                Enum.HumanoidStateType.Flying,
+            }) do
+                pcall(function() hum:SetStateEnabled(s, false) end)
+            end
+            pcall(function()
+                hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            end)
+        end
+    end)
+end
+
+-- Màn hình đen Blackout Frame phủ 100% viewport để chống dựng hình GPU/CPU
+local blackoutGui = nil
+function EngineOptim.installBlackout()
+    pcall(function()
+        local pgui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pgui then return end
+        if blackoutGui and blackoutGui.Parent then return end
+
+        local existing = pgui:FindFirstChild("KizHubUltraBlackout")
+        if existing then
+            blackoutGui = existing
+            return
+        end
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "KizHubUltraBlackout"
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 999998
+        gui.ResetOnSpawn = false
+
+        local f = Instance.new("Frame")
+        f.Size = UDim2.new(1, 0, 1, 0)
+        f.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        f.BorderSizePixel = 0
+        f.Parent = gui
+
+        local txt = Instance.new("TextLabel")
+        txt.Size = UDim2.new(1, 0, 0, 40)
+        txt.Position = UDim2.new(0, 0, 0, 10)
+        txt.BackgroundTransparency = 1
+        txt.TextColor3 = Color3.fromRGB(100, 116, 139)
+        txt.Font = Enum.Font.GothamBold
+        txt.TextSize = 13
+        txt.Text = "KIZHUB ULTRA CPU SAVER ACTIVE • 5 FPS • 3D RENDERING OFF"
+        txt.Parent = f
+
+        gui.Parent = pgui
+        blackoutGui = gui
     end)
 end
 
@@ -215,7 +307,9 @@ function EngineOptim.applyAll(targetFps, disable3d)
     EngineOptim.disableHeavyLighting()
     EngineOptim.purgeHeavyVisuals()
     EngineOptim.stopAnimations()
+    EngineOptim.optimizeHumanoid()
     EngineOptim.hideOtherPlayers()
+    EngineOptim.installBlackout()
     EngineOptim.set3dRendering(false)
     EngineOptim.startMemoryCleanupLoop()
 end

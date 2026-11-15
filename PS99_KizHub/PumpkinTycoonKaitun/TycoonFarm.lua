@@ -658,8 +658,6 @@ function TycoonFarm.farmBestPatchTick(state)
             end)
         end
     end
-
-    TycoonFarm.collectOrbsTick()
 end
 
 -- =========================================================================
