@@ -348,27 +348,61 @@ function EggHatch.hatchBestEggTick(state)
 
     -- =====================================================================
     -- CƠ CHẾ CHU KỲ: MỞ EGG 3 LẦN -> CHECK NÚT RẺ NHẤT & NGƯNG MỞ EGG ĐỂ MUA
+    -- ĐẶC BIỆT: KHI ĐÃ ĐẠT EGG BÃI CUỐI (BÃI 5 GOLDEN GROVE) -> HATCH INFINITE LIÊN TỤC
     -- =====================================================================
+    local isFinalEgg = (targetEgg.zoneIndex or 1) >= 5
+    local infiniteFinal = (Config.Economy and Config.Economy.InfiniteHatchAtFinalEgg ~= false) and isFinalEgg
     local maxCycles = (Config.Economy and Config.Economy.HatchCyclesBeforeButtonCheck) or 3
 
-    -- A. Nếu đang trong trạng thái chờ mua nút sau khi đã mở đủ 3 lần
-    if waitingForButtonId then
-        local plot = TycoonFarm and TycoonFarm.getPlot and TycoonFarm.getPlot()
-        local buttonsState = plot and plot:Save("Buttons") or {}
-        local isOwned = false
-        if buttonsState[waitingForButtonId] == true then
-            isOwned = true
-        elseif PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, waitingForButtonId) then
-            isOwned = true
+    if infiniteFinal then
+        -- Khi đã tới quả trứng bãi cuối: Reset sạch cờ chờ và mở vô hạn không giới hạn
+        waitingForButtonId = nil
+        waitingForButtonPrice = 0
+        hatchCycleCount = 0
+    else
+        -- A. Nếu đang trong trạng thái chờ mua nút sau khi đã mở đủ 3 lần
+        if waitingForButtonId then
+            local plot = TycoonFarm and TycoonFarm.getPlot and TycoonFarm.getPlot()
+            local buttonsState = plot and plot:Save("Buttons") or {}
+            local isOwned = false
+            if buttonsState[waitingForButtonId] == true then
+                isOwned = true
+            elseif PTButtons and type(PTButtons.Owned) == "function" and PTButtons.Owned(buttonsState, waitingForButtonId) then
+                isOwned = true
+            end
+
+            if isOwned then
+                print(string.format("[KizHub Tycoon] 🎯 Nút %s đã mua thành công! Reset chu kỳ, tiếp tục mở egg 3 lần.", tostring(waitingForButtonId)))
+                waitingForButtonId = nil
+                waitingForButtonPrice = 0
+                hatchCycleCount = 0
+            else
+                -- Vẫn chưa mua được -> Kiểm tra nút rẻ nhất / mục tiêu hiện tại
+                local nextBtn, btnPrice = nil, 0
+                if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
+                    nextBtn, btnPrice = TycoonFarm.getNextTargetButton()
+                end
+                if not nextBtn and TycoonFarm and type(TycoonFarm.getCheapestAvailableButton) == "function" then
+                    nextBtn, btnPrice = TycoonFarm.getCheapestAvailableButton()
+                end
+
+                if not nextBtn then
+                    -- Hết nút cần mua trên đảo
+                    waitingForButtonId = nil
+                    waitingForButtonPrice = 0
+                    hatchCycleCount = 0
+                else
+                    waitingForButtonId = nextBtn.Id
+                    waitingForButtonPrice = btnPrice or 0
+                    local curCoins = Network.currency(K.CURRENCY) or 0
+                    state.hatchStatus = string.format("Đã mở 3 lần -> Chờ mua %s (%s / %s)", tostring(waitingForButtonId), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
+                    return -- NGƯNG MỞ EGG NỮA!
+                end
+            end
         end
 
-        if isOwned then
-            print(string.format("[KizHub Tycoon] 🎯 Nút %s đã mua thành công! Reset chu kỳ, tiếp tục mở egg 3 lần.", tostring(waitingForButtonId)))
-            waitingForButtonId = nil
-            waitingForButtonPrice = 0
-            hatchCycleCount = 0
-        else
-            -- Vẫn chưa mua được -> Kiểm tra nút rẻ nhất / mục tiêu hiện tại
+        -- B. Nếu đã mở đủ 3 lần nhưng chưa gán waitingForButtonId
+        if hatchCycleCount >= maxCycles then
             local nextBtn, btnPrice = nil, 0
             if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
                 nextBtn, btnPrice = TycoonFarm.getNextTargetButton()
@@ -377,44 +411,18 @@ function EggHatch.hatchBestEggTick(state)
                 nextBtn, btnPrice = TycoonFarm.getCheapestAvailableButton()
             end
 
-            if not nextBtn then
-                -- Hết nút cần mua trên đảo
-                waitingForButtonId = nil
-                waitingForButtonPrice = 0
-                hatchCycleCount = 0
-            else
+            if nextBtn and btnPrice and btnPrice > 0 then
                 waitingForButtonId = nextBtn.Id
-                waitingForButtonPrice = btnPrice or 0
+                waitingForButtonPrice = btnPrice
                 local curCoins = Network.currency(K.CURRENCY) or 0
-                state.hatchStatus = string.format("Đã mở 3 lần -> Chờ mua %s (%s / %s)", tostring(waitingForButtonId), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
+                print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
+                state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
                 return -- NGƯNG MỞ EGG NỮA!
+            else
+                hatchCycleCount = 0
             end
         end
     end
-
-    -- B. Nếu đã mở đủ 3 lần nhưng chưa gán waitingForButtonId
-    if hatchCycleCount >= maxCycles then
-        local nextBtn, btnPrice = nil, 0
-        if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
-            nextBtn, btnPrice = TycoonFarm.getNextTargetButton()
-        end
-        if not nextBtn and TycoonFarm and type(TycoonFarm.getCheapestAvailableButton) == "function" then
-            nextBtn, btnPrice = TycoonFarm.getCheapestAvailableButton()
-        end
-
-        if nextBtn and btnPrice and btnPrice > 0 then
-            waitingForButtonId = nextBtn.Id
-            waitingForButtonPrice = btnPrice
-            local curCoins = Network.currency(K.CURRENCY) or 0
-            print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
-            state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
-            return -- NGƯNG MỞ EGG NỮA!
-        else
-            hatchCycleCount = 0
-        end
-    end
-
-
 
     -- Tính toán số lượng trứng tối đa tài khoản có thể mở mỗi lần
     initEggLibs()
@@ -427,59 +435,65 @@ function EggHatch.hatchBestEggTick(state)
         end
     end)
 
-    -- CÂN ĐỐI NGÂN SÁCH TYCOON: MUA NÚT VS MỞ TRỨNG
-    local targetBtn, btnPrice, isMilestone = nil, 0, false
-    if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
-        targetBtn, btnPrice, isMilestone = TycoonFarm.getNextTargetButton()
-    end
-
     local allowedHatch = accountMaxHatch
 
-    if targetBtn and btnPrice > 0 then
-        local hatchBatchCost = eggCost * accountMaxHatch
+    if infiniteFinal then
+        -- Chế độ Infinite Hatch tại Bãi Cuối: Cứ có tiền là mở tối đa, không cần trích lập quỹ nút
+        allowedHatch = math.clamp(math.floor(coins / eggCost), 1, accountMaxHatch)
+        state.hatchStatus = string.format("🥚 Infinite Hatch: %s (+%d)", targetEgg.displayName or targetEgg.eggName, allowedHatch)
+    else
+        -- CÂN ĐỐI NGÂN SÁCH TYCOON (DÀNH CHO CÁC BÃI 1-4): MUA NÚT VS MỞ TRỨNG
+        local targetBtn, btnPrice, isMilestone = nil, 0, false
+        if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
+            targetBtn, btnPrice, isMilestone = TycoonFarm.getNextTargetButton()
+        end
 
-        -- 1. NÚT MỐC QUAN TRỌNG (Egg hoặc Zone button):
-        -- ƯU TIÊN 100% TIỀN: Gom tiền mua nút mốc trước để nhảy vọt kinh tế!
-        if isMilestone then
-            if coins < btnPrice then
-                -- Chưa đủ tiền mua nút mốc -> Tạm dừng mở trứng để dồn tiền
-                state.hatchStatus = string.format("Dồn tiền mua %s (%s / %s)", tostring(targetBtn.Id or "Nút Mốc"), Network.shorten(coins), Network.shorten(btnPrice))
-                return
+        if targetBtn and btnPrice > 0 then
+            local hatchBatchCost = eggCost * accountMaxHatch
+
+            -- 1. NÚT MỐC QUAN TRỌNG (Egg hoặc Zone button):
+            -- ƯU TIÊN 100% TIỀN: Gom tiền mua nút mốc trước để nhảy vọt kinh tế!
+            if isMilestone then
+                if coins < btnPrice then
+                    -- Chưa đủ tiền mua nút mốc -> Tạm dừng mở trứng để dồn tiền
+                    state.hatchStatus = string.format("Dồn tiền mua %s (%s / %s)", tostring(targetBtn.Id or "Nút Mốc"), Network.shorten(coins), Network.shorten(btnPrice))
+                    return
+                else
+                    -- Đã đủ tiền mua nút mốc -> Mua nút trước, chỉ dùng phần tiền dư sau mua để mở trứng
+                    local surplus = coins - btnPrice
+                    if surplus < eggCost then
+                        state.hatchStatus = "Chờ mua nút mốc quan trọng"
+                        return
+                    end
+                    allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+                end
+            -- 2. NÚT THƯỜNG GIÁ RẺ (<= 2 lần tiền mở 1 lượt maxHatch):
+            elseif btnPrice <= hatchBatchCost * 2 then
+                if coins < btnPrice then
+                    state.hatchStatus = string.format("Tiết kiệm mua nút %s (%s)", tostring(targetBtn.Id or "Nút"), Network.shorten(btnPrice))
+                    return
+                else
+                    local surplus = coins - btnPrice
+                    if surplus < eggCost then return end
+                    allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+                end
+            -- 3. NÚT THƯỜNG GIÁ CAO (Càng về sau nút càng đắt, ví dụ 500k - 20M coins):
+            -- Giữ 60% tiền làm quỹ tích lũy, dùng tối đa 40% thặng dư để hatch liên tục
             else
-                -- Đã đủ tiền mua nút mốc -> Mua nút trước, chỉ dùng phần tiền dư sau mua để mở trứng
-                local surplus = coins - btnPrice
-                if surplus < eggCost then
-                    state.hatchStatus = "Chờ mua nút mốc quan trọng"
+                local reserveRatio = (Config.Economy and Config.Economy.ReserveRatioForExpensive) or 0.6
+                local reserve = btnPrice * reserveRatio
+                if coins > reserve then
+                    local surplus = coins - reserve
+                    if surplus < eggCost then return end
+                    allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
+                elseif coins >= hatchBatchCost * 3 then
+                    -- Nếu chưa đạt reserve nhưng tiền có sẵn gấp 3 lần lượt hatch: Hatch nhỏ giọt 20%
+                    local disposable = coins * 0.2
+                    allowedHatch = math.clamp(math.floor(disposable / eggCost), 1, accountMaxHatch)
+                else
+                    state.hatchStatus = string.format("Tích quỹ mua nút đắt (%s / %s)", Network.shorten(coins), Network.shorten(btnPrice))
                     return
                 end
-                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
-            end
-        -- 2. NÚT THƯỜNG GIÁ RẺ (<= 2 lần tiền mở 1 lượt maxHatch):
-        elseif btnPrice <= hatchBatchCost * 2 then
-            if coins < btnPrice then
-                state.hatchStatus = string.format("Tiết kiệm mua nút %s (%s)", tostring(targetBtn.Id or "Nút"), Network.shorten(btnPrice))
-                return
-            else
-                local surplus = coins - btnPrice
-                if surplus < eggCost then return end
-                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
-            end
-        -- 3. NÚT THƯỜNG GIÁ CAO (Càng về sau nút càng đắt, ví dụ 500k - 20M coins):
-        -- Giữ 60% tiền làm quỹ tích lũy, dùng tối đa 40% thặng dư để hatch liên tục
-        else
-            local reserveRatio = (Config.Economy and Config.Economy.ReserveRatioForExpensive) or 0.6
-            local reserve = btnPrice * reserveRatio
-            if coins > reserve then
-                local surplus = coins - reserve
-                if surplus < eggCost then return end
-                allowedHatch = math.clamp(math.floor(surplus / eggCost), 1, accountMaxHatch)
-            elseif coins >= hatchBatchCost * 3 then
-                -- Nếu chưa đạt reserve nhưng tiền có sẵn gấp 3 lần lượt hatch: Hatch nhỏ giọt 20%
-                local disposable = coins * 0.2
-                allowedHatch = math.clamp(math.floor(disposable / eggCost), 1, accountMaxHatch)
-            else
-                state.hatchStatus = string.format("Tích quỹ mua nút đắt (%s / %s)", Network.shorten(coins), Network.shorten(btnPrice))
-                return
             end
         end
     end
@@ -520,25 +534,29 @@ function EggHatch.hatchBestEggTick(state)
 
     -- Cập nhật chu kỳ mở trứng
     if hatchedThisTick then
-        hatchCycleCount = hatchCycleCount + 1
-        print(string.format("[KizHub Tycoon] 🥚 Mở egg lần %d/%d (Đã mở tổng cộng: %d)", hatchCycleCount, maxCycles, state.totalEggsHatched or 0))
-        if hatchCycleCount >= maxCycles then
-            local nextBtn, btnPrice = nil, 0
-            if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
-                nextBtn, btnPrice = TycoonFarm.getNextTargetButton()
-            end
-            if not nextBtn and TycoonFarm and type(TycoonFarm.getCheapestAvailableButton) == "function" then
-                nextBtn, btnPrice = TycoonFarm.getCheapestAvailableButton()
-            end
+        if infiniteFinal then
+            print(string.format("[KizHub Tycoon] 🥚 [INFINITE HATCH] %s (+%d quả) • Đã mở tổng cộng: %d", targetEgg.displayName or targetEgg.eggName, allowedHatch, state.totalEggsHatched or 0))
+        else
+            hatchCycleCount = hatchCycleCount + 1
+            print(string.format("[KizHub Tycoon] 🥚 Mở egg lần %d/%d (Đã mở tổng cộng: %d)", hatchCycleCount, maxCycles, state.totalEggsHatched or 0))
+            if hatchCycleCount >= maxCycles then
+                local nextBtn, btnPrice = nil, 0
+                if TycoonFarm and type(TycoonFarm.getNextTargetButton) == "function" then
+                    nextBtn, btnPrice = TycoonFarm.getNextTargetButton()
+                end
+                if not nextBtn and TycoonFarm and type(TycoonFarm.getCheapestAvailableButton) == "function" then
+                    nextBtn, btnPrice = TycoonFarm.getCheapestAvailableButton()
+                end
 
-            if nextBtn and btnPrice and btnPrice > 0 then
-                waitingForButtonId = nextBtn.Id
-                waitingForButtonPrice = btnPrice
-                local curCoins = Network.currency(K.CURRENCY) or 0
-                print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
-                state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
-            else
-                hatchCycleCount = 0
+                if nextBtn and btnPrice and btnPrice > 0 then
+                    waitingForButtonId = nextBtn.Id
+                    waitingForButtonPrice = btnPrice
+                    local curCoins = Network.currency(K.CURRENCY) or 0
+                    print(string.format("[KizHub Tycoon] 🛑 Đã mở egg đủ %d lần! Nút rẻ nhất tiếp theo: %s (Giá: %s Coins). Hiện có: %s Coins -> NGƯNG MỞ EGG.", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(btnPrice), Network.shorten(curCoins)))
+                    state.hatchStatus = string.format("Đã mở %d lần -> Chờ mua %s (%s / %s)", hatchCycleCount, tostring(nextBtn.Id), Network.shorten(curCoins), Network.shorten(waitingForButtonPrice))
+                else
+                    hatchCycleCount = 0
+                end
             end
         end
     end
