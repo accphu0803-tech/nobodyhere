@@ -257,7 +257,7 @@ local lastCocoaCheck = 0
 local function runHotCocoa(plot, buttonsState)
     if not Config.AutoHotCocoa then return end
     local now = os.clock()
-    if now - lastCocoaCheck < (Config.CocoaInterval or 15) then return end
+    if now - lastCocoaCheck < (Config.CocoaInterval or 60) then return end
     lastCocoaCheck = now
 
     local hasStand = false
@@ -454,7 +454,7 @@ local lastGiftCheck = 0
 local function runFlannelGifts(plot)
     if not Config.AutoOpenFlannelGifts then return end
     local now = os.clock()
-    if now - lastGiftCheck < (Config.GiftOpenInterval or 5) then return end
+    if now - lastGiftCheck < (Config.GiftOpenInterval or 60) then return end
     lastGiftCheck = now
 
     pcall(function()
@@ -473,39 +473,15 @@ local function runFlannelGifts(plot)
                             local am = tonumber(item._am or item.Amount or item.am or 1) or 1
                             local count = math.clamp(am, 1, 100)
 
-                            -- 1. Client module PumpkinTycoonCmds.Gift & LootboxCmds
-                            pcall(function()
-                                local ptGift = safeRequire({ "Library", "Client", "PumpkinTycoonCmds", "Gift" })
-                                if ptGift and type(ptGift.Open) == "function" then
-                                    ptGift.Open(itemId, count)
-                                    ptGift.Open(uid, count)
-                                end
-                                local lbMod = safeRequire({ "Library", "Client", "LootboxCmds" })
-                                if lbMod and type(lbMod.Open) == "function" then
-                                    lbMod.Open(itemId, count)
-                                    lbMod.Open(uid, count)
-                                end
-                            end)
-
-                            -- 2. Server Verb trên Plot: KX_Release
+                            -- Mở quà chạy ngầm 100% qua Server (KHÔNG mở UI/Túi đồ client để chống lag)
                             if plot then
                                 pcall(function()
                                     plot:Invoke(K.VERBS.OpenGift or "KX_Release", uid, count)
                                 end)
-                                pcall(function()
-                                    plot:Invoke(K.VERBS.OpenGift or "KX_Release", itemId, count)
-                                end)
-                                pcall(function()
-                                    plot:Invoke(K.VERBS.OpenGift or "KX_Release", count)
-                                end)
                             end
 
-                            -- 3. Remotes dự phòng qua Network
                             pcall(function()
-                                Network.netInvoke("Lootbox: Open", itemId, count)
                                 Network.netInvoke("Lootbox: Open", uid, count)
-                                Network.netInvoke("GiftBag: Open", uid, count)
-                                Network.netInvoke("GiftBag_Open", uid, count)
                             end)
 
                             task.wait(0.2)

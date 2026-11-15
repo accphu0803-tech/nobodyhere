@@ -202,6 +202,24 @@ end
 
 AntiAFK.installGodModeAntiAfk(Network.netFire, Config.AfkPulseInterval or 35)
 
+-- Chống bung và tự động ẩn cửa sổ túi đồ / popup rương quà để triệt tiêu 100% giật lag
+task.spawn(function()
+    while state.alive do
+        pcall(function()
+            local pgui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pgui then
+                for _, name in ipairs({ "Inventory", "Lootbox", "GiftOpening", "CardOpening", "Rewards" }) do
+                    local g = pgui:FindFirstChild(name)
+                    if g and g:IsA("ScreenGui") and g.Enabled then
+                        g.Enabled = false
+                    end
+                end
+            end
+        end)
+        task.wait(1.5)
+    end
+end)
+
 -- =========================================================================
 -- 3. ĐẢM BẢO NGƯỜI CHƠI ĐÃ VÀO INSTANCE PUMPKIN TYCOON
 -- =========================================================================
@@ -474,7 +492,7 @@ task.spawn(function()
                 TycoonFarm.ensureAutoBreakZero()
             end
         end)
-        task.wait(3.0)
+        task.wait(6.0)
     end
 end)
 
@@ -494,7 +512,7 @@ task.spawn(function()
                 end
             end
         end)
-        task.wait(15.0)
+        task.wait(30.0)
     end
 end)
 

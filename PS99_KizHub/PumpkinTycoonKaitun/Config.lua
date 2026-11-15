@@ -72,7 +72,7 @@ local Config = {
 
     -- Trạm Hot Cocoa Boost
     AutoHotCocoa = true,
-    CocoaInterval = 15,
+    CocoaInterval = 60,
     CocoaMinRemainingSeconds = 900, -- Mua thêm khi còn dưới 15 phút
     AutoConsumeBoosts = true,
 
@@ -100,7 +100,7 @@ local Config = {
 
     -- Quà Flannel & Quà miễn phí
     AutoOpenFlannelGifts = true,
-    GiftOpenInterval = 4,
+    GiftOpenInterval = 60,
     AutoClaimFreeGifts = true,
 
     -- Mailbox & Quà tặng

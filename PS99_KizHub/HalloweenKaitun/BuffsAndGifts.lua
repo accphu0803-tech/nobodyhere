@@ -60,9 +60,9 @@ function BuffsAndGifts.runDelayedBuffs(state)
     }
     local now = os.clock()
 
-    -- 1. Fruits: Tối đa 20 quả/lần theo tên quả
+    -- 1. Fruits: Tối đa 20 quả/lần theo tên quả (giãn cách 2 phút)
     if bCfg.Fruits and now >= (state.nextFruitAt or 0) then
-        state.nextFruitAt = now + 60
+        state.nextFruitAt = now + 120
         pcall(function()
             local s = Net.getSave()
             local fruits = s and s.Inventory and s.Inventory.Fruit
@@ -81,9 +81,9 @@ function BuffsAndGifts.runDelayedBuffs(state)
         end)
     end
 
-    -- 2. Potions: Tự cắn Potions (damage, coins, luck, speed, treasure)
+    -- 2. Potions: Tự cắn Potions (giãn cách 3 phút)
     if bCfg.Potions and now >= (state.nextPotionAt or 0) then
-        state.nextPotionAt = now + 90
+        state.nextPotionAt = now + 180
         pcall(function()
             local s = Net.getSave()
             local potions = s and s.Inventory and s.Inventory.Potion
@@ -109,9 +109,9 @@ function BuffsAndGifts.runDelayedBuffs(state)
         end)
     end
 
-    -- 3. Toys: Dùng Toys truyền đúng UID từ Inventory.Misc
+    -- 3. Toys: Dùng Toys truyền đúng UID từ Inventory.Misc (giãn cách 5 phút)
     if bCfg.Toys and now >= (state.nextToyAt or 0) then
-        state.nextToyAt = now + 180
+        state.nextToyAt = now + 300
         pcall(function()
             local s = Net.getSave()
             local misc = s and s.Inventory and s.Inventory.Misc
