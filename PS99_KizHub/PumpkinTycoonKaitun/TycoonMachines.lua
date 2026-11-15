@@ -285,23 +285,68 @@ local function runHotCocoa(plot, buttonsState)
         end
     end
 
-    -- Tự động sử dụng các bình Buff / Vật phẩm Hot Cocoa trong túi đồ
-    if Config.AutoConsumeBoosts then
+    -- Tự động sử dụng các bình Buff / Vật phẩm Hot Cocoa / Boost Event trong túi đồ
+    if Config.AutoConsumeBoosts ~= false then
         pcall(function()
             local s = Network.getSave()
             local inv = s and s.Inventory
             if not inv then return end
 
-            local itemsToConsume = { "Patch Coin Boost", "Pumpkin Damage Boost", "Island Luck Boost", "Hot Cocoa" }
-            for _, cat in ipairs({ "Consumable", "Misc", "Item" }) do
+            local itemsToConsume = {
+                "Patch Coin Boost",
+                "Pumpkin Damage Boost",
+                "Island Luck Boost",
+                "Hot Cocoa",
+                "Pumpkin Boost",
+                "Tycoon Boost",
+                "Event Luck Potion",
+                "Event Potion",
+            }
+            local eventKeywords = { "boost", "cocoa", "pumpkin", "patch" }
+
+            for _, cat in ipairs({ "Consumable", "Misc", "Item", "Potion" }) do
                 if type(inv[cat]) == "table" then
                     for uid, itemData in pairs(inv[cat]) do
                         if type(itemData) == "table" and type(itemData.id) == "string" then
-                            for _, matchId in ipairs(itemsToConsume) do
-                                if itemData.id == matchId or itemData.id:find(matchId) then
-                                    Network.netFire("Consumables_Consume", uid, 1)
-                                    task.wait(0.05)
+                            local idLower = string.lower(itemData.id)
+                            local matched = false
+
+                            for _, exactName in ipairs(itemsToConsume) do
+                                if itemData.id == exactName or idLower == string.lower(exactName) then
+                                    matched = true
                                     break
+                                end
+                            end
+
+                            if not matched then
+                                for _, kw in ipairs(eventKeywords) do
+                                    if idLower:find(kw) then
+                                        matched = true
+                                        break
+                                    end
+                                end
+                            end
+
+                            if matched then
+                                local amt = tonumber(itemData._am) or 1
+                                if amt > 0 then
+                                    if cat == "Potion" then
+                                        Network.netFire("Potions: Consume", itemData.id)
+                                    else
+                                        -- Thử HotCocoa_Consume nếu là Cocoa
+                                        if idLower:find("cocoa") then
+                                            local okCocoa = Network.netInvoke("HotCocoa_Consume", uid)
+                                            if not okCocoa then
+                                                Network.netFire("HotCocoa_Consume", uid)
+                                            end
+                                        end
+                                        -- Gọi Consumables_Consume chuẩn
+                                        local okCons = Network.netInvoke("Consumables_Consume", uid, 1)
+                                        if not okCons then
+                                            Network.netFire("Consumables_Consume", uid, 1)
+                                        end
+                                    end
+                                    task.wait(0.08)
                                 end
                             end
                         end

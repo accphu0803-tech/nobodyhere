@@ -91,7 +91,7 @@ function BuffsAndGifts.runDelayedBuffs(state)
             local s = Net.getSave()
             local potions = s and s.Inventory and s.Inventory.Potion
             if type(potions) == "table" then
-                local targetTypes = { "damage", "coins", "luck", "lucky", "speed", "treasure" }
+                local targetTypes = { "damage", "coins", "luck", "lucky", "speed", "treasure", "pumpkin", "patch", "cocoa", "tycoon", "event" }
                 for _, item in pairs(potions) do
                     if type(item) == "table" and type(item.id) == "string" then
                         local lowerId = string.lower(item.id)
