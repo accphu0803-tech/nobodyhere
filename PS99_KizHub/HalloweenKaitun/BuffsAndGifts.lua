@@ -15,17 +15,41 @@ function BuffsAndGifts.init(deps)
     Config = deps.Config
 end
 
--- Tự động nhận 12 mốc quà Free Gifts định kỳ mỗi 3 phút
+-- Tự động nhận 12 mốc quà Free Gifts định kỳ mỗi 90 giây (Multi-Channel Redeem)
 function BuffsAndGifts.checkAndClaimFreeGifts(state)
     if not Config.AutoClaimFreeGifts then return end
     local now = os.clock()
     if now < (state.nextClaimGiftsAt or 0) then return end
-    state.nextClaimGiftsAt = now + 180 -- Nhận quà mỗi 3 phút, chống spam remote
+    state.nextClaimGiftsAt = now + 90 -- Kiểm tra mỗi 90 giây
 
     pcall(function()
+        local RS = game:GetService("ReplicatedStorage")
+        local FreeGiftsCmds = nil
+        pcall(function()
+            FreeGiftsCmds = require(RS.Library.Client.FreeGiftsCmds)
+        end)
+
         for i = 1, 12 do
-            Net.netInvoke("Redeem Free Gift", i)
-            task.wait(0.2)
+            local claimed = false
+            if FreeGiftsCmds and type(FreeGiftsCmds.Claim) == "function" then
+                local ok, res = pcall(FreeGiftsCmds.Claim, i)
+                if ok and res == true then claimed = true end
+            end
+            if not claimed then
+                local okInv, resInv = Net.netInvoke("Redeem Free Gift", i)
+                if okInv and resInv == true then claimed = true end
+            end
+            if not claimed then
+                Net.netFire("Redeem Free Gift", i)
+            end
+            if not claimed then
+                local r = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Redeem Free Gift")
+                if r then
+                    if r:IsA("RemoteFunction") then pcall(function() r:InvokeServer(i) end)
+                    elseif r:IsA("RemoteEvent") then pcall(function() r:FireServer(i) end) end
+                end
+            end
+            task.wait(0.12)
         end
     end)
 end

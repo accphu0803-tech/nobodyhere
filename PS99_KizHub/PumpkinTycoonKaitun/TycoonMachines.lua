@@ -476,30 +476,62 @@ local function runFlannelGifts(plot)
             end
         end
     end)
-
-    if Config.AutoClaimFreeGifts then
-        pcall(function()
-            for i = 1, 12 do
-                Network.netInvoke("Redeem Free Gift", i)
-            end
-        end)
-    end
 end
 
 -- =========================================================================
--- 6. TỔNG HỢP VÒNG LẶP MÁY & TÓM TẮT DỮ LIỆU UI
+-- 6. TỰ ĐỘNG NHẬN 12 MỐC QUÀ FREE GIFTS THEO THỜI GIAN CHƠI
+-- =========================================================================
+
+local lastFreeGiftCheck = 0
+local function runFreeGifts()
+    if not Config.AutoClaimFreeGifts then return end
+    local now = os.clock()
+    if now - lastFreeGiftCheck < 90 then return end
+    lastFreeGiftCheck = now
+
+    pcall(function()
+        local RS = game:GetService("ReplicatedStorage")
+        local FreeGiftsCmds = safeRequire({ "Library", "Client", "FreeGiftsCmds" })
+        for i = 1, 12 do
+            local claimed = false
+            if FreeGiftsCmds and type(FreeGiftsCmds.Claim) == "function" then
+                local ok, res = pcall(FreeGiftsCmds.Claim, i)
+                if ok and res == true then claimed = true end
+            end
+            if not claimed then
+                local okInv, resInv = Network.netInvoke("Redeem Free Gift", i)
+                if okInv and resInv == true then claimed = true end
+            end
+            if not claimed then
+                Network.netFire("Redeem Free Gift", i)
+            end
+            if not claimed then
+                local r = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Redeem Free Gift")
+                if r then
+                    if r:IsA("RemoteFunction") then pcall(function() r:InvokeServer(i) end)
+                    elseif r:IsA("RemoteEvent") then pcall(function() r:FireServer(i) end) end
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+-- =========================================================================
+-- 7. TỔNG HỢP VÒNG LẶP MÁY & TÓM TẮT DỮ LIỆU UI
 -- =========================================================================
 
 function TycoonMachines.runAllMachinesTick(state)
     local plot = getPlot()
-    if not plot then return end
-
-    local buttonsState = plot:Save("Buttons") or {}
-    runUpgrades(plot, buttonsState)
-    runMerchantAndStock(plot, buttonsState)
-    runHotCocoa(plot, buttonsState)
-    runGoldRainbowPets(buttonsState)
-    runFlannelGifts(plot)
+    if plot then
+        local buttonsState = plot:Save("Buttons") or {}
+        runUpgrades(plot, buttonsState)
+        runMerchantAndStock(plot, buttonsState)
+        runHotCocoa(plot, buttonsState)
+        runGoldRainbowPets(buttonsState)
+        runFlannelGifts(plot)
+    end
+    runFreeGifts()
 end
 
 local UPGRADE_TRACK_SPECS = {
