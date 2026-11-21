@@ -43,7 +43,7 @@ local DEFAULT_CONFIG = {
     AutoTap = true,
     AutoPetFocus = true,
     AutoSpreadZoneBreakables = true, -- Spread each pet onto its own highest-zone breakable; focus all pets on BonusChest/Pedestal
-    AutoTeleportToTarget = true,
+    AutoTeleportToTarget = false,      -- [NO-TELE]: Đã tắt tele đến pumpkin, pet tự chạy đến đập,
     AutoBuffPetSpeed = true,        -- Overrides LocalPlayer CalculateSpeedMultiplier() -> PetSpeedMultiplier
     PetSpeedMultiplier = 999,       -- Target speedMult (PetRendering multiplies petSpeed * petSpeedMult)
     FarmOrchardAndHay = true,
@@ -135,7 +135,8 @@ local DEFAULT_CONFIG = {
     FallbackHighestUnlockedEgg = true,
     HatchDisableAnimation = true,
     HatchMinBatchMultiplier = 1,    -- Start hatching when Coins >= cost * maxBatch * mult (or >= cost * 1)
-    HatchMoveMaxDist = 14,
+    HatchMoveMaxDist = 75,             -- [STAND-EGG]: Giữ khoảng cách tối đa 75 studs từ egg
+    HatchStandDistance = 55,           -- [STAND-EGG]: Đứng cách egg ~50-65 studs hướng về bãi farm để vừa hatch vừa farm
     HatchCooldown = 0.05,
 
     -- Pet Crafting (Gold & Rainbow Machine)
@@ -157,12 +158,12 @@ local DEFAULT_CONFIG = {
     AutoEventPass = false,
 
     -- Map & Render Optimization
-    OptimizeMap = true,                 -- Master toggle for world cleanup + visual hiding + lighting/FX reduction
-    StripWorldClutter = true,           -- Destroy unused world maps/props (PSX Portal, Border, Ornaments, unused Instances, __DEBRIS)
-    HideIslandVisuals = true,           -- Make PumpkinTycoonIslands, __THINGS.Plots, Pads, Pumpkins invisible + strip decals/FX
-    HideEntityVisuals = true,           -- Make Breakables, CustomEggs, Pets, Orbs & other players invisible (keeps hitboxes/data)
-    OptimizeLightingAndEffects = true,  -- Disable Shadows/Sky/Bloom/Atmosphere/PostEffects/Particles and Terrain decoration
-    SafeFloorEnabled = true,            -- Maintain invisible backup Baseplate under own plot to prevent void falls
+    OptimizeMap = false,                 -- Master toggle for world cleanup + visual hiding + lighting/FX reduction
+    StripWorldClutter = false,           -- Destroy unused world maps/props (PSX Portal, Border, Ornaments, unused Instances, __DEBRIS)
+    HideIslandVisuals = false,           -- Make PumpkinTycoonIslands, __THINGS.Plots, Pads, Pumpkins invisible + strip decals/FX
+    HideEntityVisuals = false,           -- Make Breakables, CustomEggs, Pets, Orbs & other players invisible (keeps hitboxes/data)
+    OptimizeLightingAndEffects = false,  -- Disable Shadows/Sky/Bloom/Atmosphere/PostEffects/Particles and Terrain decoration
+    SafeFloorEnabled = false,            -- Maintain invisible backup Baseplate under own plot to prevent void falls
     OptimizeScanInterval = 2.0,         -- Seconds between low-cost sweeps for newly streamed islands/players
 
     -- Pumpkin Tycoon Part 2 Settings
@@ -187,8 +188,8 @@ local DEFAULT_CONFIG = {
     NotifyTitanic = true,
 
     -- Cấu hình hiệu năng & FPS (Non-Opti 60FPS vs Opti 5FPS)
-    CPUSaver = true,
-    TargetFPS = 5,
+    CPUSaver = false,
+    TargetFPS = 60,
 }
 
 local function ApplyConfigDefaults(dst, src)
@@ -3524,11 +3525,18 @@ local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
     local eggCF = GetEggTargetCFrame(plot, targetEggInfo)
     local eggPos = eggCF and eggCF.Position or nil
 
-    -- Auto Teleport character near egg position to force streaming if far
+    -- Auto Teleport character to stand 50-60 studs from egg towards plot center / farm field
     local _, hrp = GetCharacter()
-    if hrp and eggPos and HorizontalDist(hrp.Position, eggPos) > (Config.HatchMoveMaxDist or 14) then
+    local maxDist = Config.HatchMoveMaxDist or 75
+    local standDist = Config.HatchStandDistance or 55
+    if hrp and eggPos and HorizontalDist(hrp.Position, eggPos) > maxDist then
         if not IsMoveLocked() then
-            hrp.CFrame = CFrame.new(eggPos + Vector3.new(0, 3, 5))
+            local plotModel = plot and plot.GetModel and plot:GetModel()
+            local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
+            local dir = (centerPos - eggPos).Unit
+            if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
+            local standPos = eggPos + (dir * standDist) + Vector3.new(0, 3, 0)
+            hrp.CFrame = CFrame.new(standPos, eggPos)
             task.wait(0.2)
         end
     end
@@ -3671,8 +3679,16 @@ local function StepHatch(plot, buttons, part1Complete)
 
     Runtime.Cache.HatchInFlight = true
     local _, hrp = GetCharacter()
-    if hrp and HorizontalDist(hrp.Position, eggPos) > (Config.HatchMoveMaxDist or 14) then
-        MoveNear(eggPos, Config.HatchMoveMaxDist or 14)
+    local maxDist = Config.HatchMoveMaxDist or 75
+    local standDist = Config.HatchStandDistance or 55
+    if hrp and HorizontalDist(hrp.Position, eggPos) > maxDist then
+        local plotModel = plot and plot.GetModel and plot:GetModel()
+        local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
+        local dir = (centerPos - eggPos).Unit
+        if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
+        local standPos = eggPos + (dir * standDist) + Vector3.new(0, 3, 0)
+        hrp.CFrame = CFrame.new(standPos, eggPos)
+        Runtime.Cache.LastTeleportAt = os.clock()
         task.wait(0.25) -- Allow physics position replication before CustomEggs_Hatch range check
         if not IsRunning() or not Config.AutoHatch or IsMoveLocked() or (Runtime.Cache.HatchYieldUntil or 0) > os.clock() then
             Runtime.Cache.HatchInFlight = false
@@ -5530,6 +5546,17 @@ end
 -- ============================================================================
 -- 14. ENTRYPOINT
 -- ============================================================================
+-- Bật 3D Rendering và 60 FPS ngay lập tức để người chơi quan sát
+pcall(function()
+    local r = game:GetService("RunService")
+    if type(r.Set3dRenderingEnabled) == "function" then
+        r:Set3dRenderingEnabled(true)
+    end
+    if type(setfpscap) == "function" then
+        setfpscap(60)
+    end
+end)
+
 -- Khởi tạo GUI ngay lập tức khi inject script, không chờ WaitReady
 pcall(SetupMiniGui)
 
