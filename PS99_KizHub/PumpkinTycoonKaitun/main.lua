@@ -4429,11 +4429,8 @@ local function StepWildPets(plot)
             Runtime.State.CatchingSighting = true
             Log("INFO", "🚨 RARE PET SIGHTING DETECTED! Deploying Ultra Pet Net...")
             pcall(function()
-                if PT_Turkey.Throw then
-                    PT_Turkey.Throw(sighting, "Ultra Pet Net")
-                else
-                    plot:Invoke(NET.CatchSighting, sighting.Id or sighting.Slot or 1, "Ultra Pet Net")
-                end
+                -- Invoke directly via network remote to bypass buggy client animation interrupts
+                plot:Invoke(NET.CatchSighting, (type(sighting) == "table" and (sighting.Id or sighting.Slot)) or sighting or 1, "Ultra Pet Net")
             end)
             WildPetsState.LastThrowAt = now
             WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
@@ -4498,11 +4495,8 @@ local function StepWildPets(plot)
         end
 
         local okThrow = pcall(function()
-            if PT_Nets and PT_Nets.Throw then
-                PT_Nets.Throw(bestSlot, netType)
-            else
-                plot:Invoke(NET.CatchWild, bestSlot, netType)
-            end
+            -- Invoke directly via plot:Invoke(NET.CatchWild) to avoid client animation interrupts ("Failed to catch the nil")
+            return plot:Invoke(NET.CatchWild, bestSlot, netType)
         end)
         if okThrow then
             WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
