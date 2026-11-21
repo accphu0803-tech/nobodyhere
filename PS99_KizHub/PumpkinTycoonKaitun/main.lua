@@ -101,6 +101,7 @@ local DEFAULT_CONFIG = {
         "EggLuck",
         "StockSlots",
         "MerchantLuck",
+        "AutoBreakRules",
     },
     UpgradeCheapCatchupRatio = 0.40, -- Buy lower-priority track if cost <= 40% of blocked top priority (0 = strict linear)
 
@@ -163,6 +164,18 @@ local DEFAULT_CONFIG = {
     OptimizeLightingAndEffects = true,  -- Disable Shadows/Sky/Bloom/Atmosphere/PostEffects/Particles and Terrain decoration
     SafeFloorEnabled = true,            -- Maintain invisible backup Baseplate under own plot to prevent void falls
     OptimizeScanInterval = 2.0,         -- Seconds between low-cost sweeps for newly streamed islands/players
+
+    -- Pumpkin Tycoon Part 2 Settings
+    AutoCatchWild = true,              -- Auto throw nets at wild pets on island (RU_Ensnare)
+    WildMinTier = "Any",               -- "Any" (0), "Uncommon+" (1), "Rare+" (2), "Epic+" (3), "Huges only" (4)
+    WildVariantsOnly = false,          -- Only catch Golden / Rainbow / Shiny wild pets
+    WildUltraOnHugesOnly = true,       -- Reserve Ultra Pet Nets (x5 catch chance) for Huge/Sightings only
+    AutoHuntWild = true,               -- Auto synchronize Hunt configuration (LF_Pursue) and patrol spawn zones
+    AutoCatchSightings = true,         -- Priority Catch Rare Sightings (Huge Gobble Husky, Titanic Maple Turkey, Gargantuan Pumpkin Dragon)
+    AutoBuyNets = true,                -- Auto buy Pet Nets / restock nets when low (< 5)
+    AutoFightTurkey = true,            -- Auto launch cannon (TC_Launch), enter Turkey Boss arena & attack boss
+    AutoRebirth = false,               -- Auto Rebirth at Zone 8 Rebirth Shrine (EW_Renew)
+    AutoUseBoostsTier3 = true,         -- Auto consume Tier III / II / I Tycoon Boosts (Coins, Damage, IslandLuck)
 
     -- Webhook & AutoMail (KizHub)
     AutoMailHuge = true,
@@ -391,6 +404,8 @@ local Modules = {
     LadderTypes = SafeRequire(Library, "Types", "PumpkinTycoon", "Ladder"),
     MerchantTypes = SafeRequire(Library, "Types", "PumpkinTycoon", "Merchant"),
     UpgradesTypes = SafeRequire(Library, "Types", "PumpkinTycoon", "Upgrades"),
+    WildTypes = SafeRequire(Library, "Types", "PumpkinTycoon", "Wild"),
+    ChaseTypes = SafeRequire(Library, "Types", "PumpkinTycoon", "Chase"),
     LootboxTypes = SafeRequire(Library, "Types", "Lootboxes"),
 
     PumpkinButtonsUtil = SafeRequire(Library, "Util", "PumpkinTycoonButtons"),
@@ -409,6 +424,18 @@ local Modules = {
 local PT_Cmds = SafeRequire(Library, "Client", "PumpkinTycoonCmds")
 local PT_Buttons = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Buttons")
 local PT_AutoBreak = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "AutoBreak")
+local PT_Wild = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Wild")
+local PT_Nets = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Nets")
+local PT_Turkey = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Turkey")
+local PT_TurkeyFx = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "TurkeyFx")
+local PT_TurkeySign = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "TurkeySign")
+local PT_TurkeyBoard = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "TurkeyBoard")
+local PT_TurkeyLoot = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "TurkeyLoot")
+local PT_Pumpkins = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Pumpkins")
+local PT_PumpkinFx = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "PumpkinFx")
+local PT_Upgrades = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Upgrades")
+local PT_Rebirth = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "Rebirth")
+local PT_RebirthMoment = PT_Cmds and SafeRequire(Library, "Client", "PumpkinTycoonCmds", "RebirthMoment")
 
 local NET_FIRE_HOOK_KEY = "_PumpkinTycoonKaitun_NetFireHookTarget"
 
@@ -1440,16 +1467,25 @@ local INSTANCE_ID = (PT and PT.INSTANCE_ID) or "PumpkinTycoon"
 local NET = (PT and PT.NET) or {
     Buy = "NZ_Commit",
     BuyBand = "FZ_Reserve",
+    BuyNet = "ZK_Barter",
+    Cannon = "TC_Launch",
+    CatchSighting = "PV_Glimpse",
+    CatchWild = "RU_Ensnare",
     CocoaBuyTime = "VB_Extend",
-    SetAutoBreak = "QW_Policy",
-    SetLock = "KT_Shelter",
-    PlaceStock = "XC_Allocate",
-    SetAutoPlace = "JD_Prefer",
-    SetAutoMerchant = "HM_Sustain",
-    UpgradeBuy = "OQ_Advance",
-    GiftOpen = "YR_Hydrate",
     Complete = "BT_Settle",
+    Complete2 = "MH_Conclude",
+    GiftOpen = "YR_Hydrate",
+    NetShelf = "QS_Survey",
+    PlaceStock = "XC_Allocate",
+    Rebirth = "EW_Renew",
+    SetAutoBreak = "QW_Policy",
+    SetAutoMerchant = "HM_Sustain",
+    SetAutoNets = "GN_Restock",
+    SetAutoPlace = "JD_Prefer",
+    SetHunt = "LF_Pursue",
+    SetLock = "KT_Shelter",
     TutorialDone = "WL_Recall",
+    UpgradeBuy = "OQ_Advance",
 }
 local VAR = (PT and PT.VAR) or {
     Buttons = "Buttons",
@@ -1458,6 +1494,11 @@ local VAR = (PT and PT.VAR) or {
     Merchant = "Merchant",
     AutoBreak = "AutoBreak",
     Tutorial = "Tutorial",
+    Wild = "Wild",
+    Hunt = "Hunt",
+    Rebirths = "Rebirths",
+    TurkeyDmg = "TurkeyDmg",
+    TurkeyWindow = "TurkeyWindow",
 }
 
 local function GetCharacter()
@@ -1750,10 +1791,10 @@ local function IsOnMyIsland(model, islandBox)
 end
 
 local function GetZoneCount()
-    if GetFlag("PumpkinTycoon_Part2", false) == true then
-        return #(PT and PT.ZONES or {})
+    if PT and PT.ZONES and #PT.ZONES > 0 then
+        return #PT.ZONES
     end
-    return (PT and PT.PART1_ZONES) or 5
+    return 8
 end
 
 local function GetProgressState(plot)
@@ -2420,7 +2461,7 @@ local function GetTapReach()
 end
 
 local function StepFarmTargeter(plot)
-    if not Config.AutoFarm or not plot then
+    if not Config.AutoFarm or not plot or (Runtime.State and (Runtime.State.CatchingSighting or Runtime.State.FightingTurkey)) then
         activeFarmTarget = nil
         Runtime.Stats.ActiveTargetUid = nil
         Runtime.Stats.ActiveTargetDesc = "Idle"
@@ -2680,7 +2721,7 @@ local function StepButtonsAndComplete(plot)
         return buttons, part1Complete, claimedComplete
     end
 
-    local part2 = GetFlag("PumpkinTycoon_Part2", false) == true
+    local part2 = true -- Pumpkin Tycoon Part 2 is fully active
     local zones = GetZoneCount()
     local priceMult = GetButtonPriceMult()
     local coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
@@ -3391,72 +3432,144 @@ local function IsEggOnMyIsland(egg, islandBox, pos)
     return false
 end
 
+local PUMPKIN_EGG_ZONES = {
+    { Zone = 8, Name = "Golden Ridge Egg", ButtonId = "Zone8_Egg", Section = "Zone8" },
+    { Zone = 7, Name = "Maple Creek Egg", ButtonId = "Zone7_Egg", Section = "Zone7" },
+    { Zone = 6, Name = "Pine Woods Egg", ButtonId = "Zone6_Egg", Section = "Zone6" },
+    { Zone = 5, Name = "Golden Grove Egg", ButtonId = "GoldenGrove_Egg", Section = "GoldenGrove" },
+    { Zone = 4, Name = "Cider Mill Egg", ButtonId = "CiderMill_Egg", Section = "CiderMill" },
+    { Zone = 3, Name = "Hayride Hill Egg", ButtonId = "HayrideHill_Egg", Section = "HayrideHill" },
+    { Zone = 2, Name = "Apple Orchard Egg", ButtonId = "AppleOrchard_Egg", Section = "AppleOrchard" },
+    { Zone = 1, Name = "Cocoa Cabin Egg", ButtonId = "CocoaCabin_Egg", Section = "CocoaCabin" },
+}
+
+local function GetBestUnlockedEggInfo(buttons)
+    if buttons and Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned then
+        for _, info in ipairs(PUMPKIN_EGG_ZONES) do
+            if Modules.PumpkinButtonsUtil.Owned(buttons, info.ButtonId) then
+                return info
+            end
+        end
+    end
+    -- Fallback via Save.Get().EventEggReach.PumpkinTycoon if available
+    local save = Modules.Save and Modules.Save.Get and Modules.Save.Get()
+    local reach = save and save.EventEggReach and save.EventEggReach.PumpkinTycoon
+    if type(reach) == "number" and reach >= 1 and reach <= 8 then
+        for _, info in ipairs(PUMPKIN_EGG_ZONES) do
+            if info.Zone == reach then
+                return info
+            end
+        end
+    end
+    return PUMPKIN_EGG_ZONES[#PUMPKIN_EGG_ZONES] -- Fallback Cocoa Cabin
+end
+
+local function GetEggTargetCFrame(plot, eggInfo)
+    if not plot or not eggInfo then return nil end
+    local plotModel = plot.GetModel and plot:GetModel()
+    if not plotModel then return nil end
+
+    -- 1. Try reading direct CFrame attribute on Plot Model
+    local attr = plotModel:GetAttribute(eggInfo.ButtonId)
+    if typeof(attr) == "CFrame" then
+        return attr
+    elseif typeof(attr) == "Vector3" then
+        return CFrame.new(attr)
+    end
+
+    -- 2. Try PadMarker child or attribute
+    local padMarker = plotModel:FindFirstChild("PadMarker_" .. eggInfo.ButtonId)
+    if padMarker and padMarker:IsA("BasePart") then
+        return padMarker.CFrame
+    end
+    local padAttr = plotModel:GetAttribute("PadMarker_" .. eggInfo.ButtonId)
+    if typeof(padAttr) == "CFrame" then
+        return padAttr
+    end
+
+    -- 3. Try Break Zone for this zone number
+    local things = Workspace:FindFirstChild("__THINGS")
+    local fakeBreakZones = things and things:FindFirstChild("__FAKE_INSTANCE_BREAK_ZONES")
+    if fakeBreakZones then
+        for _, zonePart in ipairs(fakeBreakZones:GetChildren()) do
+            if zonePart:GetAttribute("ZoneNumber") == eggInfo.Zone then
+                if zonePart:IsA("BasePart") then
+                    return zonePart.CFrame + Vector3.new(0, 4, 15)
+                end
+            end
+        end
+    end
+
+    -- 4. Fallback: plot model pivot
+    return plotModel:GetPivot()
+end
+
 local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
-    if not Modules.CustomEggsCmds or not Modules.CustomEggsCmds.All then
-        return nil, nil, nil, nil
-    end
-    local ok, allEggs = pcall(Modules.CustomEggsCmds.All)
-    if not ok or type(allEggs) ~= "table" then
-        return nil, nil, nil, nil
-    end
-
-    local islandBox = GetIslandBox(plot)
-    local candidateNames = {}
-    local seenNames = {}
-    local function pushName(name)
-        if type(name) == "string" and not seenNames[name] then
-            seenNames[name] = true
-            table.insert(candidateNames, name)
-        end
-    end
-
-    if not preferHighestUnlocked then
-        pushName(Config.TargetEggName)
-    end
-    if (preferHighestUnlocked or Config.FallbackHighestUnlockedEgg) and PT and PT.ZONES then
-        local maxZones = GetZoneCount()
-        for i = math.min(#PT.ZONES, maxZones), 1, -1 do
-            local z = PT.ZONES[i]
-            if z.Egg then
-                local eggBtnId = z.Section .. "_Egg"
-                if Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned(buttons, eggBtnId) then
-                    pushName(z.Egg)
-                end
+    local targetEggInfo = nil
+    if not preferHighestUnlocked and Config.TargetEggName and Config.TargetEggName ~= "Best" and Config.TargetEggName ~= "" then
+        for _, info in ipairs(PUMPKIN_EGG_ZONES) do
+            if info.Name == Config.TargetEggName then
+                targetEggInfo = info
+                break
             end
         end
     end
-    if preferHighestUnlocked then
-        pushName(Config.TargetEggName)
+    if not targetEggInfo then
+        targetEggInfo = GetBestUnlockedEggInfo(buttons)
+    end
+    if not targetEggInfo then
+        targetEggInfo = PUMPKIN_EGG_ZONES[#PUMPKIN_EGG_ZONES]
     end
 
-    for _, wantedName in ipairs(candidateNames) do
-        for uid, egg in pairs(allEggs) do
-            if type(egg) == "table" and egg._id == wantedName then
-                local canHatch = (egg._hatchable == true)
-                if not canHatch and egg.IsHatchable then
-                    local hOk, hRes = pcall(egg.IsHatchable, egg)
-                    canHatch = hOk and hRes == true
-                end
-                if canHatch then
-                    local pos = egg._position
-                    if not pos and egg._model then
-                        pcall(function()
-                            pos = egg._model:GetPivot().Position
-                        end)
-                    end
-                    if pos and IsEggOnMyIsland(egg, islandBox, pos) then
-                        local maxPerEgg = tonumber(egg._maxEggCount)
-                        if not maxPerEgg and egg.GetMaxEggCount then
-                            local mOk, mRes = pcall(egg.GetMaxEggCount, egg)
-                            maxPerEgg = mOk and tonumber(mRes) or nil
-                        end
-                        return tostring(egg._uid or uid), wantedName, pos, maxPerEgg
+    local eggCF = GetEggTargetCFrame(plot, targetEggInfo)
+    local eggPos = eggCF and eggCF.Position or nil
+
+    -- Auto Teleport character near egg position to force streaming if far
+    local _, hrp = GetCharacter()
+    if hrp and eggPos and HorizontalDist(hrp.Position, eggPos) > (Config.HatchMoveMaxDist or 14) then
+        if not IsMoveLocked() then
+            hrp.CFrame = CFrame.new(eggPos + Vector3.new(0, 3, 5))
+            task.wait(0.2)
+        end
+    end
+
+    -- 1. Scan CustomEggsCmds.All()
+    if Modules.CustomEggsCmds and Modules.CustomEggsCmds.All then
+        local ok, allEggs = pcall(Modules.CustomEggsCmds.All)
+        if ok and type(allEggs) == "table" then
+            for uid, egg in pairs(allEggs) do
+                if type(egg) == "table" and (egg._id == targetEggInfo.Name or egg._uid) then
+                    local canHatch = (egg._hatchable ~= false)
+                    if canHatch then
+                        local pos = egg._position or (egg._model and egg._model:GetPivot().Position) or eggPos
+                        local maxPerEgg = tonumber(egg._maxEggCount) or 8
+                        return tostring(egg._uid or uid), targetEggInfo.Name, pos, maxPerEgg
                     end
                 end
             end
         end
     end
-    return nil, nil, nil, nil
+
+    -- 2. Scan workspace.__THINGS.CustomEggs directly (UUID model name)
+    local things = Workspace:FindFirstChild("__THINGS")
+    local customEggsFolder = things and things:FindFirstChild("CustomEggs")
+    if customEggsFolder then
+        for _, eggModel in ipairs(customEggsFolder:GetChildren()) do
+            if eggModel:IsA("Model") then
+                local flowKind = eggModel:GetAttribute("FlowKind")
+                local kitPiece = eggModel:GetAttribute("KitPiece")
+                local zNum = eggModel:GetAttribute("ZoneNumber")
+                local label = eggModel:GetAttribute("FlowLabel")
+                if flowKind == "egg" or kitPiece == "custom-egg" or zNum == targetEggInfo.Zone or label == targetEggInfo.Name then
+                    local pos = eggModel:GetPivot().Position
+                    return eggModel.Name, targetEggInfo.Name, pos, 8
+                end
+            end
+        end
+    end
+
+    -- Fallback return with targetEggInfo
+    return targetEggInfo.ButtonId, targetEggInfo.Name, eggPos, 8
 end
 
 EvaluateEarlyBootstrap = function(plot, buttons)
@@ -3493,7 +3606,7 @@ EvaluateEarlyBootstrap = function(plot, buttons)
 end
 
 local function StepHatch(plot, buttons, part1Complete)
-    if not Config.AutoHatch or not plot then
+    if not Config.AutoHatch or not plot or (Runtime.State and (Runtime.State.CatchingSighting or Runtime.State.FightingTurkey)) then
         Runtime.Stats.IsHatching = false
         return
     end
@@ -4275,6 +4388,306 @@ local function StepCraftPets(plot, buttons)
 end
 
 -- ============================================================================
+-- ============================================================================
+-- 11C. WILD PETS & NETS ENGINE (PART 2)
+-- ============================================================================
+local WildPetsState = {
+    LastThrowAt = 0,
+    LastRestockAt = 0,
+    LastHuntSyncAt = 0,
+    CaughtCount = 0,
+    LastSightingCheckAt = 0,
+}
+
+local function StepWildPets(plot)
+    if not Config.AutoCatchWild or not plot then return end
+    local now = os.clock()
+    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 3.0) then
+        return
+    end
+
+    -- 1. Check for Rare / Huge Sightings FIRST (Absolute Priority)
+    if Config.AutoCatchSightings and PT_Turkey and PT_Turkey.Sighting then
+        local okS, sighting = pcall(PT_Turkey.Sighting)
+        if okS and sighting then
+            Runtime.State.CatchingSighting = true
+            Log("INFO", "🚨 RARE PET SIGHTING DETECTED! Deploying Ultra Pet Net...")
+            pcall(function()
+                if PT_Turkey.Throw then
+                    PT_Turkey.Throw(sighting, "Ultra Pet Net")
+                else
+                    plot:Invoke(NET.CatchSighting, sighting.Id or sighting.Slot or 1, "Ultra Pet Net")
+                end
+            end)
+            WildPetsState.LastThrowAt = now
+            WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
+            Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+            task.wait(0.5)
+            Runtime.State.CatchingSighting = false
+            return
+        end
+    end
+
+    -- 2. Scan live wild pets on plot (slots 1..50)
+    local wildData = plot:Save(VAR.Wild) or (PT_Wild and PT_Wild.All and PT_Wild.All())
+    if type(wildData) ~= "table" then return end
+
+    local tierMap = { ["Any"] = 0, ["Uncommon+"] = 1, ["Rare+"] = 2, ["Epic+"] = 3, ["Huges only"] = 4 }
+    local minTier = tierMap[Config.WildMinTier] or 0
+
+    local bestSlot = nil
+    local bestScore = -1
+    local bestIsHuge = false
+
+    for slotKey, info in pairs(wildData) do
+        local slotNum = tonumber(slotKey)
+        if slotNum and type(info) == "table" then
+            local petId = tostring(info.P or info.PetId or "")
+            local isHuge = string.find(petId, "Huge") ~= nil or string.find(petId, "Titanic") ~= nil or string.find(petId, "Gargantuan") ~= nil
+            local tier = isHuge and 4 or (tonumber(info.Tier) or 0)
+            local isVariant = (info.G == true or info.R == true or info.S == true)
+
+            local valid = (tier >= minTier)
+            if Config.WildVariantsOnly and not isVariant then
+                valid = false
+            end
+
+            if valid then
+                local score = (isHuge and 1000 or 0) + (info.R and 300 or (info.S and 200 or (info.G and 100 or 0))) + (tonumber(info.Z) or 1) * 10 + (tier * 5)
+                if score > bestScore then
+                    bestScore = score
+                    bestSlot = slotNum
+                    bestIsHuge = isHuge
+                end
+            end
+        end
+    end
+
+    if bestSlot then
+        WildPetsState.LastThrowAt = now
+        local netType = "Pet Net"
+        if bestIsHuge or not Config.WildUltraOnHugesOnly then
+            netType = "Ultra Pet Net"
+        end
+
+        -- Legit mode: walk near physical pet before throwing
+        if Config.LegitMode and PT_Wild and PT_Wild.Physical then
+            pcall(function()
+                local phys = PT_Wild.Physical(bestSlot)
+                if phys and phys:IsA("Model") then
+                    MoveNear(phys:GetPivot().Position, 12)
+                    task.wait(0.15)
+                end
+            end)
+        end
+
+        local okThrow = pcall(function()
+            if PT_Nets and PT_Nets.Throw then
+                PT_Nets.Throw(bestSlot, netType)
+            else
+                plot:Invoke(NET.CatchWild, bestSlot, netType)
+            end
+        end)
+        if okThrow then
+            WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
+            Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+        end
+    end
+
+    -- 3. Auto sync Hunt config (every 60s)
+    if Config.AutoHuntWild and (now - WildPetsState.LastHuntSyncAt) > 60 then
+        WildPetsState.LastHuntSyncAt = now
+        pcall(function()
+            plot:Invoke(NET.SetHunt, {
+                On = true,
+                Min = minTier,
+                Variant = Config.WildVariantsOnly == true,
+                UltraOnHuge = Config.WildUltraOnHugesOnly == true,
+            })
+        end)
+    end
+
+    -- 4. Auto Restock Nets (every 30s)
+    if Config.AutoBuyNets and (now - WildPetsState.LastRestockAt) > 30 then
+        WildPetsState.LastRestockAt = now
+        pcall(function()
+            plot:Invoke(NET.SetAutoNets, true)
+        end)
+    end
+end
+
+-- ============================================================================
+-- 11D. TURKEY BOSS FIGHT & REBIRTH SHRINE ENGINE (PART 2)
+-- ============================================================================
+local TurkeyBossState = {
+    Fighting = false,
+    LastCheckAt = 0,
+    LastRebirthCheckAt = 0,
+    BossFightsCount = 0,
+}
+
+local function StepTurkeyBoss(plot, buttons)
+    if not Config.AutoFightTurkey or not plot then return end
+    local now = os.clock()
+    if (now - TurkeyBossState.LastCheckAt) < 3.0 then return end
+    TurkeyBossState.LastCheckAt = now
+
+    -- Check Cannon ownership
+    local hasCannon = false
+    if PT_Turkey and PT_Turkey.OwnsCannon then
+        local okC, resC = pcall(PT_Turkey.OwnsCannon)
+        hasCannon = okC and resC == true
+    end
+    if not hasCannon and Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned then
+        hasCannon = Modules.PumpkinButtonsUtil.Owned(buttons, "Zone8_Cannon")
+    end
+    if not hasCannon then
+        local plotModel = plot.GetModel and plot:GetModel()
+        hasCannon = plotModel and plotModel:GetAttribute("CannonEver") == true
+    end
+    if not hasCannon then return end
+
+    -- Check if Turkey Boss is active
+    local bossWindow = plot:Save("TurkeyWindow") or (plot.GetAttribute and plot:GetAttribute("TurkeyWindow"))
+    local isBossActive = (type(bossWindow) == "number" and bossWindow > 0) or (type(bossWindow) == "boolean" and bossWindow)
+
+    if isBossActive and not TurkeyBossState.Fighting then
+        TurkeyBossState.Fighting = true
+        Runtime.State.FightingTurkey = true
+        Runtime.Stats.Phase = "🦃 Fighting Turkey Boss!"
+        Log("INFO", "🦃 Turkey Boss battle is LIVE! Launching cannon into arena...")
+
+        -- Launch into arena
+        pcall(function()
+            plot:Invoke(NET.Cannon)
+        end)
+        task.wait(1.5)
+
+        -- Target Turkey Boss breakable
+        pcall(function()
+            local things = Workspace:FindFirstChild("__THINGS")
+            local breakables = things and things:FindFirstChild("Breakables")
+            if breakables then
+                for _, b in ipairs(breakables:GetChildren()) do
+                    local name = b.Name
+                    local class = b:GetAttribute("Class") or ""
+                    if string.find(name, "Turkey") or string.find(class, "Turkey") or string.find(class, "Boss") then
+                        if Modules.PlayerPet and Modules.PlayerPet.SetTarget then
+                            Modules.PlayerPet.SetTarget(b.Name)
+                        end
+                        break
+                    end
+                end
+            end
+        end)
+
+        -- Claim Turkey loot periodically
+        task.delay(10, function()
+            pcall(function()
+                if PT_TurkeyLoot and PT_TurkeyLoot.Claim then
+                    PT_TurkeyLoot.Claim()
+                end
+            end)
+        end)
+    elseif not isBossActive and TurkeyBossState.Fighting then
+        TurkeyBossState.Fighting = false
+        Runtime.State.FightingTurkey = false
+        TurkeyBossState.BossFightsCount = TurkeyBossState.BossFightsCount + 1
+        Log("INFO", "🦃 Turkey Boss defeated! Returning to island...")
+
+        -- Claim final loot
+        pcall(function()
+            if PT_TurkeyLoot and PT_TurkeyLoot.Claim then
+                PT_TurkeyLoot.Claim()
+            end
+        end)
+
+        -- Check sighting right after boss
+        if PT_Turkey and PT_Turkey.Sighting then
+            pcall(function()
+                local s = PT_Turkey.Sighting()
+                if s then
+                    Log("INFO", "🌟 Post-boss Sighting found! Catching with Ultra Net...")
+                    plot:Invoke(NET.CatchSighting, s.Id or 1, "Ultra Pet Net")
+                end
+            end)
+        end
+
+        -- Return to island
+        local plotModel = plot.GetModel and plot:GetModel()
+        local _, hrp = GetCharacter()
+        if hrp and plotModel then
+            hrp.CFrame = plotModel:GetPivot() + Vector3.new(0, 5, 0)
+        end
+    end
+end
+
+local function StepRebirthShrine(plot, buttons)
+    if not Config.AutoRebirth or not plot then return end
+    local now = os.clock()
+    if (now - TurkeyBossState.LastRebirthCheckAt) < 15.0 then return end
+    TurkeyBossState.LastRebirthCheckAt = now
+
+    -- Check if Zone 8 Rebirth Shrine is owned
+    local hasShrine = false
+    if Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned then
+        hasShrine = Modules.PumpkinButtonsUtil.Owned(buttons, "Zone8_RebirthShrine")
+    end
+    if not hasShrine then return end
+
+    -- Verify all Zone 8 buttons are completed
+    local okP, done, total = pcall(Modules.PumpkinButtonsUtil.Progress, buttons, 8, true)
+    if okP and done and total and done >= total then
+        Log("INFO", "🌟 Zone 8 100% COMPLETE! Performing Auto Rebirth at Shrine...")
+        local okR = pcall(function()
+            plot:Invoke(NET.Rebirth)
+        end)
+        if okR then
+            Runtime.Stats.RebirthsCount = (Runtime.Stats.RebirthsCount or 0) + 1
+            Log("INFO", "🎉 Tycoon Rebirth SUCCESS! Total Rebirths: %d", Runtime.Stats.RebirthsCount)
+        end
+    end
+end
+
+-- ============================================================================
+-- 11E. TIER III TYCOON BOOSTS ENGINE (PART 2)
+-- ============================================================================
+local BoostsP2State = {
+    LastCheckAt = 0,
+}
+
+local function StepTier3Boosts()
+    if not Config.AutoUseBoostsTier3 then return end
+    local now = os.clock()
+    if (now - BoostsP2State.LastCheckAt) < 15.0 then return end
+    BoostsP2State.LastCheckAt = now
+
+    local boostTracks = {
+        { "PumpkinTycoonCoins3", "PumpkinTycoonCoins2", "PumpkinTycoonCoins1" },
+        { "PumpkinTycoonDamage3", "PumpkinTycoonDamage2", "PumpkinTycoonDamage1" },
+        { "PumpkinTycoonIslandLuck3", "PumpkinTycoonIslandLuck2", "PumpkinTycoonIslandLuck1" },
+    }
+
+    for _, tierList in ipairs(boostTracks) do
+        for _, bId in ipairs(tierList) do
+            local sec = GetBoostTimerSeconds(bId)
+            if sec < 300 then
+                local okUse = pcall(function()
+                    if Modules.Network and Modules.Network.Fire then
+                        Modules.Network.Fire("Boosts_Consume", bId, 1)
+                    end
+                end)
+                if okUse then
+                    task.wait(0.1)
+                    break
+                end
+            else
+                break -- Still active with > 5 minutes
+            end
+        end
+    end
+end
+
 -- 12. OPTIONAL EVENT PASS CLAIM LOOP
 -- ============================================================================
 local lastPassCheck = 0
@@ -4778,21 +5191,21 @@ local function UpdateMiniGui()
 
     local ok, err = pcall(function()
         local coins = (Runtime and Runtime.Stats and Runtime.Stats.Coins) or 0
-        local tokens = GetCurrency((PT and PT.TOKEN) or "PumpkinTokens") or 0
+        local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens") or 0
         local hatched = (Runtime and Runtime.Stats and Runtime.Stats.EggsHatched) or 0
         local gifts = (Runtime and Runtime.Stats and Runtime.Stats.GiftsOpened) or 0
-        local phase = (Runtime and Runtime.Stats and Runtime.Stats.Phase) or "Đang chạy..."
-        local mailStat = (MailState and MailState.Status) or "Rảnh"
+        local wildCaught = (Runtime and Runtime.Stats and Runtime.Stats.WildCaught) or 0
         local nextBtn = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonName) or "Đang quét..."
         local missing = (Runtime and Runtime.Stats and Runtime.Stats.MissingCoins) or 0
         local cost = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonCost) or 0
+        local turkeyStatus = (Runtime and Runtime.State and Runtime.State.FightingTurkey) and "Đang đánh Boss!" or "Sẵn sàng"
 
         if MiniGuiState.CoinsLabel then
             MiniGuiState.CoinsLabel.Text = string.format("💰 Coins: %s • 🎟️ Tokens: %s", ShortenNumber(coins), ShortenNumber(tokens))
         end
         if MiniGuiState.ButtonLabel then
             if nextBtn == "Đã xong tất cả" then
-                MiniGuiState.ButtonLabel.Text = "🔘 Nút: Hoàn thành 100% tất cả!"
+                MiniGuiState.ButtonLabel.Text = "🔘 Zone 8: Hoàn thành 100% tất cả!"
             elseif missing > 0 then
                 MiniGuiState.ButtonLabel.Text = string.format("🔘 Nút: %s (Thiếu %s)", tostring(nextBtn), ShortenNumber(missing))
             elseif cost > 0 then
@@ -4802,13 +5215,13 @@ local function UpdateMiniGui()
             end
         end
         if MiniGuiState.HatchLabel then
-            MiniGuiState.HatchLabel.Text = string.format("🥚 Hatched: %s • 🎁 Gifts: %s", ShortenNumber(hatched), ShortenNumber(gifts))
+            MiniGuiState.HatchLabel.Text = string.format("🥚 Hatched: %s • 🦃 Turkey: %s", ShortenNumber(hatched), tostring(turkeyStatus))
         end
         if MiniGuiState.PhaseLabel then
-            MiniGuiState.PhaseLabel.Text = string.format("📌 %s", tostring(phase))
+            MiniGuiState.PhaseLabel.Text = string.format("🐾 Wild Pets: %s • 🕸️ Nets: Auto", ShortenNumber(wildCaught))
         end
         if MiniGuiState.MailLabel then
-            MiniGuiState.MailLabel.Text = string.format("📦 Mail: %s", tostring(mailStat))
+            MiniGuiState.MailLabel.Text = string.format("🎁 Gifts: %s • 📦 Mail: %s", ShortenNumber(gifts), tostring(MailState and MailState.Status or "Rảnh"))
         end
     end)
     if not ok then
@@ -4948,9 +5361,9 @@ SetupMiniGui = function()
 
         MiniGuiState.CoinsLabel = makeLabel(25, Color3.fromRGB(251, 191, 36), "💰 Coins: 0 • 🎟️ Tokens: 0")
         MiniGuiState.ButtonLabel = makeLabel(44, Color3.fromRGB(244, 114, 182), "🔘 Nút: Đang kết nối...")
-        MiniGuiState.HatchLabel = makeLabel(63, Color3.fromRGB(168, 85, 247), "🥚 Hatched: 0 • 🎁 Gifts: 0")
-        MiniGuiState.PhaseLabel = makeLabel(82, Color3.fromRGB(56, 189, 248), "📌 Đang kết nối game...")
-        MiniGuiState.MailLabel = makeLabel(101, Color3.fromRGB(52, 211, 153), "📦 Mail: Sẵn sàng")
+        MiniGuiState.HatchLabel = makeLabel(63, Color3.fromRGB(168, 85, 247), "🥚 Hatched: 0 • 🦃 Turkey: Chờ...")
+        MiniGuiState.PhaseLabel = makeLabel(82, Color3.fromRGB(56, 189, 248), "🐾 Wild Pets: 0 • 🕸️ Nets: Auto")
+        MiniGuiState.MailLabel = makeLabel(101, Color3.fromRGB(52, 211, 153), "🎁 Gifts: 0 • 📦 Mail: Sẵn sàng")
 
         sg.Parent = parentTarget
         MiniGuiState.ScreenGui = sg
@@ -5071,6 +5484,38 @@ local function StartLoops()
         while IsRunning() do
             pcall(StepAutoMail)
             task.wait(30)
+        end
+    end)
+
+    -- Loop H: Wild Pets & Sighting Monitor (Part 2)
+    task.spawn(function()
+        while IsRunning() do
+            local plot = GetMyPlot()
+            if plot then
+                pcall(StepWildPets, plot)
+            end
+            task.wait(1.5)
+        end
+    end)
+
+    -- Loop I: Turkey Boss & Rebirth Monitor (Part 2)
+    task.spawn(function()
+        while IsRunning() do
+            local plot = GetMyPlot()
+            if plot then
+                local buttons = GetProgressState(plot)
+                pcall(StepTurkeyBoss, plot, buttons)
+                pcall(StepRebirthShrine, plot, buttons)
+            end
+            task.wait(3.0)
+        end
+    end)
+
+    -- Loop J: Tier III Tycoon Boosts Monitor (Part 2)
+    task.spawn(function()
+        while IsRunning() do
+            pcall(StepTier3Boosts)
+            task.wait(15.0)
         end
     end)
 
