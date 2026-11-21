@@ -131,12 +131,12 @@ local DEFAULT_CONFIG = {
     EarlyHatchMaxPerEgg = 8,        -- Cap early bootstrap hatches per unlocked egg tier
     EarlyHatchReserveCoins = true,  -- Temporarily reserve 1x egg cost during early bootstrap before buying buttons
     AutoEquipBestPets = true,       -- Ensure AutoEquipPets / EquipBest equips newly hatched stronger pets immediately
-    TargetEggName = "Golden Grove Egg",
-    FallbackHighestUnlockedEgg = true,
+    TargetEggName = "Best",             -- "Best" (highest unlocked egg) or specific egg name ("Zone8_Egg", "Golden Grove Egg", etc.)
+    FallbackHighestUnlockedEgg = true,  -- If specified egg not unlocked yet, automatically fallback to highest unlocked egg
     HatchDisableAnimation = true,
     HatchMinBatchMultiplier = 1,    -- Start hatching when Coins >= cost * maxBatch * mult (or >= cost * 1)
-    HatchMoveMaxDist = 75,             -- [STAND-EGG]: Giữ khoảng cách tối đa 75 studs từ egg
-    HatchStandDistance = 55,           -- [STAND-EGG]: Đứng cách egg ~50-65 studs hướng về bãi farm để vừa hatch vừa farm
+    HatchMoveMaxDist = 18,          -- [STAND-EGG]: Giu khoang cach toi da 18 studs tu egg (chi dinh vi lai neu bi day qua xa)
+    HatchStandDistance = 10,        -- [STAND-EGG]: Dung cach qua trung 10 studs truc dien mat truoc de hatch muot va farm bai
     HatchCooldown = 0.05,
 
     -- Pet Crafting (Gold & Rainbow Machine)
@@ -1621,69 +1621,13 @@ local function WithMachineSession(callback)
 end
 
 local function EnsureNearMachinePad(plot, machineName, rangeFn, standOnPad)
-    if not plot or not machineName or not Modules.PumpkinButtonsUtil or not Modules.PumpkinButtonsUtil.MachinePad then
-        return false
-    end
-    local okPlot, plotModel = pcall(plot.GetModel, plot)
-    if not okPlot or not plotModel then
-        return false
-    end
-    local pad = Modules.PumpkinButtonsUtil.MachinePad(plotModel, machineName)
-    if not pad or not pad:IsA("BasePart") then
-        return false
-    end
-    local range = 20
-    if type(rangeFn) == "number" and rangeFn >= 6 then
-        range = rangeFn
-    elseif type(rangeFn) == "function" then
-        local okR, r = pcall(rangeFn)
-        if okR and type(r) == "number" and r >= 6 then
-            range = r
-        end
-    end
-    local moveDist = standOnPad and 2.5 or math.clamp(range - 8, 4, 12)
-    local _, hrp = GetCharacter()
-    if not hrp then
-        return false
-    end
-    ExtendMachineSession(4.0)
-    local needMove = HorizontalDist(hrp.Position, pad.Position) > moveDist
-        or math.abs(hrp.Position.Y - pad.Position.Y) > 6
-    if standOnPad and Modules.MachineCmds and Modules.MachineCmds.IsStandingOn then
-        local okOn, standing = pcall(Modules.MachineCmds.IsStandingOn, machineName)
-        if okOn and standing == false then
-            needMove = true
-        end
-    end
-    if needMove then
-        pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.zero
-        end)
-        local targetOffset = standOnPad
-            and Vector3.new(0, (pad.Size.Y * 0.5) + 2.8, 0)
-            or Vector3.new(0, 2.5, 1.5)
-        hrp.CFrame = CFrame.new(pad.Position + targetOffset)
-        Runtime.Cache.LastTeleportAt = os.clock()
-    end
-    local waitLeft = 0.38 - (os.clock() - (Runtime.Cache.LastTeleportAt or 0))
-    if waitLeft > 0 then
-        task.wait(waitLeft)
-    end
-    _, hrp = GetCharacter()
-    if not hrp or (hrp.Position - pad.Position).Magnitude > (range - 1) then
-        return false
-    end
+    -- In Pumpkin Tycoon, all plot machine actions (Cocoa, Merchant, Crafting) run cleanly via network remotes
+    -- without requiring the character to physically abandon the egg stand.
     return true
 end
 
 local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
-    BeginMachineSession(1.5)
-    local standOnPad = type(opts) == "table" and opts.standOnPad == true
     local closeModal = type(opts) == "table" and opts.closeModal == true
-    if not EnsureNearMachinePad(plot, machineName, rangeFn, standOnPad) then
-        EndMachineSession()
-        return false
-    end
     if closeModal then
         CloseMachineTab(machineName)
     end
@@ -1696,7 +1640,6 @@ local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
             end
         end)
     end
-    EndMachineSession()
     if not ok then
         Log("DEBUG", "Machine action error [%s]: %s", tostring(machineName), tostring(err))
         return false
@@ -3232,6 +3175,9 @@ local function GetEggPrice(eggName)
         ["Hayride Hill Egg"] = 4000,
         ["Cider Mill Egg"] = 8000,
         ["Golden Grove Egg"] = 16000,
+        ["Pine Woods Egg"] = 35000,
+        ["Maple Creek Egg"] = 75000,
+        ["Golden Ridge Egg"] = 150000,
     }
     return fallbacks[eggName] or 16000
 end
@@ -3488,13 +3434,14 @@ local function GetEggTargetCFrame(plot, eggInfo)
         return padAttr
     end
 
-    -- 3. Try Break Zone for this zone number
+    -- 3. Try Break Zone on OWN island for this zone number
     local things = Workspace:FindFirstChild("__THINGS")
     local fakeBreakZones = things and things:FindFirstChild("__FAKE_INSTANCE_BREAK_ZONES")
+    local islandBox = GetIslandBox(plot)
     if fakeBreakZones then
         for _, zonePart in ipairs(fakeBreakZones:GetChildren()) do
-            if zonePart:GetAttribute("ZoneNumber") == eggInfo.Zone then
-                if zonePart:IsA("BasePart") then
+            if zonePart:GetAttribute("ZoneNumber") == eggInfo.Zone and zonePart:IsA("BasePart") then
+                if not islandBox or not PT or not PT.OnIsland or PT.OnIsland(islandBox.cf, islandBox.size, zonePart.Position) then
                     return zonePart.CFrame + Vector3.new(0, 4, 15)
                 end
             end
@@ -3509,8 +3456,14 @@ local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
     local targetEggInfo = nil
     if not preferHighestUnlocked and Config.TargetEggName and Config.TargetEggName ~= "Best" and Config.TargetEggName ~= "" then
         for _, info in ipairs(PUMPKIN_EGG_ZONES) do
-            if info.Name == Config.TargetEggName then
-                targetEggInfo = info
+            if info.Name == Config.TargetEggName or info.ButtonId == Config.TargetEggName then
+                local isUnlocked = false
+                if buttons and Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned then
+                    isUnlocked = Modules.PumpkinButtonsUtil.Owned(buttons, info.ButtonId)
+                end
+                if isUnlocked or Config.FallbackHighestUnlockedEgg == false then
+                    targetEggInfo = info
+                end
                 break
             end
         end
@@ -3524,41 +3477,30 @@ local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
 
     local eggCF = GetEggTargetCFrame(plot, targetEggInfo)
     local eggPos = eggCF and eggCF.Position or nil
+    local islandBox = GetIslandBox(plot)
 
-    -- Auto Teleport character to stand 50-60 studs from egg towards plot center / farm field
-    local _, hrp = GetCharacter()
-    local maxDist = Config.HatchMoveMaxDist or 75
-    local standDist = Config.HatchStandDistance or 55
-    if hrp and eggPos and HorizontalDist(hrp.Position, eggPos) > maxDist then
-        if not IsMoveLocked() then
-            local plotModel = plot and plot.GetModel and plot:GetModel()
-            local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
-            local dir = (centerPos - eggPos).Unit
-            if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
-            local standPos = eggPos + (dir * standDist) + Vector3.new(0, 3, 0)
-            hrp.CFrame = CFrame.new(standPos, eggPos)
-            task.wait(0.2)
-        end
-    end
-
-    -- 1. Scan CustomEggsCmds.All()
+    -- 1. Scan CustomEggsCmds.All() for matching egg on our island
     if Modules.CustomEggsCmds and Modules.CustomEggsCmds.All then
         local ok, allEggs = pcall(Modules.CustomEggsCmds.All)
         if ok and type(allEggs) == "table" then
             for uid, egg in pairs(allEggs) do
-                if type(egg) == "table" and (egg._id == targetEggInfo.Name or egg._uid) then
-                    local canHatch = (egg._hatchable ~= false)
-                    if canHatch then
+                if type(egg) == "table" then
+                    local matchName = (egg._id == targetEggInfo.Name or egg._name == targetEggInfo.Name)
+                    local matchZone = (egg._zone == targetEggInfo.Zone or egg._zoneNumber == targetEggInfo.Zone)
+                    if (matchName or matchZone) and (egg._hatchable ~= false) then
                         local pos = egg._position or (egg._model and egg._model:GetPivot().Position) or eggPos
-                        local maxPerEgg = tonumber(egg._maxEggCount) or 8
-                        return tostring(egg._uid or uid), targetEggInfo.Name, pos, maxPerEgg
+                        if IsEggOnMyIsland(egg, islandBox, pos) then
+                            local maxPerEgg = tonumber(egg._maxEggCount) or 8
+                            local modelCF = (egg._model and egg._model:GetPivot()) or eggCF
+                            return tostring(egg._uid or uid), targetEggInfo.Name, pos, maxPerEgg, modelCF
+                        end
                     end
                 end
             end
         end
     end
 
-    -- 2. Scan workspace.__THINGS.CustomEggs directly (UUID model name)
+    -- 2. Scan workspace.__THINGS.CustomEggs directly (UUID model name) on our island
     local things = Workspace:FindFirstChild("__THINGS")
     local customEggsFolder = things and things:FindFirstChild("CustomEggs")
     if customEggsFolder then
@@ -3568,16 +3510,20 @@ local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
                 local kitPiece = eggModel:GetAttribute("KitPiece")
                 local zNum = eggModel:GetAttribute("ZoneNumber")
                 local label = eggModel:GetAttribute("FlowLabel")
-                if flowKind == "egg" or kitPiece == "custom-egg" or zNum == targetEggInfo.Zone or label == targetEggInfo.Name then
+                local isEggPiece = (flowKind == "egg" or kitPiece == "custom-egg")
+                local isTargetZone = (zNum == targetEggInfo.Zone or label == targetEggInfo.Name or eggModel.Name == targetEggInfo.ButtonId)
+                if isEggPiece and isTargetZone then
                     local pos = eggModel:GetPivot().Position
-                    return eggModel.Name, targetEggInfo.Name, pos, 8
+                    if IsOnMyIsland(eggModel, islandBox) then
+                        return eggModel.Name, targetEggInfo.Name, pos, 8, eggModel:GetPivot()
+                    end
                 end
             end
         end
     end
 
-    -- Fallback return with targetEggInfo
-    return targetEggInfo.ButtonId, targetEggInfo.Name, eggPos, 8
+    -- 3. Fallback return with targetEggInfo and plot attribute eggCF
+    return targetEggInfo.ButtonId, targetEggInfo.Name, eggPos, 8, eggCF
 end
 
 EvaluateEarlyBootstrap = function(plot, buttons)
@@ -3585,7 +3531,7 @@ EvaluateEarlyBootstrap = function(plot, buttons)
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
     end
-    local eggUid, eggName, eggPos, eggMax = ResolveTargetEgg(plot, buttons, true)
+    local eggUid, eggName, eggPos, eggMax, eggCF = ResolveTargetEgg(plot, buttons, true)
     if not eggUid or not eggPos then
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
@@ -3610,7 +3556,7 @@ EvaluateEarlyBootstrap = function(plot, buttons)
     local eggCost = GetEggPrice(eggName)
     Runtime.Cache.ReserveEarlyEggCost = (Config.EarlyHatchReserveCoins ~= false) and eggCost or 0
     local remainingCap = maxEarly - hatchedHere
-    return true, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap
+    return true, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF
 end
 
 local function StepHatch(plot, buttons, part1Complete)
@@ -3620,11 +3566,11 @@ local function StepHatch(plot, buttons, part1Complete)
     end
 
     local isEarly = false
-    local eggUid, eggName, eggPos, eggMax, eggCost, remainingCap
+    local eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF
 
     if Config.RushButtonsFirst and not part1Complete then
         local needEarly
-        needEarly, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap = EvaluateEarlyBootstrap(plot, buttons)
+        needEarly, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF = EvaluateEarlyBootstrap(plot, buttons)
         if not needEarly then
             Runtime.Stats.IsHatching = false
             return
@@ -3632,7 +3578,7 @@ local function StepHatch(plot, buttons, part1Complete)
         isEarly = true
     else
         Runtime.Cache.ReserveEarlyEggCost = 0
-        eggUid, eggName, eggPos, eggMax = ResolveTargetEgg(plot, buttons, false)
+        eggUid, eggName, eggPos, eggMax, eggCF = ResolveTargetEgg(plot, buttons, false)
         if not eggUid or not eggPos then
             Runtime.Stats.IsHatching = false
             return
@@ -3679,17 +3625,25 @@ local function StepHatch(plot, buttons, part1Complete)
 
     Runtime.Cache.HatchInFlight = true
     local _, hrp = GetCharacter()
-    local maxDist = Config.HatchMoveMaxDist or 75
-    local standDist = Config.HatchStandDistance or 55
+    local maxDist = Config.HatchMoveMaxDist or 18
+    local standDist = Config.HatchStandDistance or 10
     if hrp and HorizontalDist(hrp.Position, eggPos) > maxDist then
-        local plotModel = plot and plot.GetModel and plot:GetModel()
-        local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
-        local dir = (centerPos - eggPos).Unit
-        if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
-        local standPos = eggPos + (dir * standDist) + Vector3.new(0, 3, 0)
-        hrp.CFrame = CFrame.new(standPos, eggPos)
-        Runtime.Cache.LastTeleportAt = os.clock()
-        task.wait(0.25) -- Allow physics position replication before CustomEggs_Hatch range check
+        if not IsMoveLocked() then
+            local standPos
+            if typeof(eggCF) == "CFrame" and eggCF.LookVector.Magnitude > 0.5 then
+                -- Stand 10 studs directly in front of the egg pedestal facing it
+                standPos = eggCF.Position + (eggCF.LookVector * standDist) + Vector3.new(0, 1.5, 0)
+            else
+                local plotModel = plot and plot.GetModel and plot:GetModel()
+                local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
+                local dir = (centerPos - eggPos).Unit
+                if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
+                standPos = eggPos + (dir * standDist) + Vector3.new(0, 1.5, 0)
+            end
+            hrp.CFrame = CFrame.new(standPos, Vector3.new(eggPos.X, standPos.Y, eggPos.Z))
+            Runtime.Cache.LastTeleportAt = os.clock()
+            task.wait(0.2)
+        end
         if not IsRunning() or not Config.AutoHatch or IsMoveLocked() or (Runtime.Cache.HatchYieldUntil or 0) > os.clock() then
             Runtime.Cache.HatchInFlight = false
             Runtime.Stats.IsHatching = false
