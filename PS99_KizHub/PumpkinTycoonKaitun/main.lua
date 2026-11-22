@@ -1663,7 +1663,6 @@ end
 
 local function FindMachinePadCFrame(plot, machineName)
     local plotModel = plot and plot.GetModel and plot:GetModel()
-    if not plotModel then return nil end
 
     local testNames = {
         machineName,
@@ -1673,27 +1672,58 @@ local function FindMachinePadCFrame(plot, machineName)
     if lName:find("cocoa") then
         table.insert(testNames, "PadMarker_CocoaStand")
         table.insert(testNames, "CocoaStand")
+        table.insert(testNames, "Hot Cocoa Stand")
+        table.insert(testNames, "PumpkinTycoonCocoaStand")
+        table.insert(testNames, "CocoaCabin_Zone")
     elseif lName:find("merchant") then
         table.insert(testNames, "PadMarker_Merchant")
         table.insert(testNames, "Merchant")
+        table.insert(testNames, "PumpkinTycoonMerchant")
     elseif lName:find("petnet") or lName:find("net") then
         table.insert(testNames, "PadMarker_PetNetStore")
         table.insert(testNames, "PetNetStore")
+        table.insert(testNames, "NetStore")
     elseif lName:find("upgrade") then
         table.insert(testNames, "PadMarker_UpgradeMachine")
         table.insert(testNames, "UpgradeMachine")
     end
 
-    for _, n in ipairs(testNames) do
-        local part = plotModel:FindFirstChild(n, true)
-        if part and part:IsA("BasePart") then
-            return part.CFrame + Vector3.new(0, 3, 0)
-        end
-        local attr = plotModel:GetAttribute(n)
-        if typeof(attr) == "CFrame" then
-            return attr + Vector3.new(0, 3, 0)
-        elseif typeof(attr) == "Vector3" then
-            return CFrame.new(attr + Vector3.new(0, 3, 0))
+    local searchRoots = {}
+    if plotModel then table.insert(searchRoots, plotModel) end
+    if Workspace:FindFirstChild("PumpkinTycoonPads") then table.insert(searchRoots, Workspace.PumpkinTycoonPads) end
+    if Workspace:FindFirstChild("PumpkinTycoonIslands") then table.insert(searchRoots, Workspace.PumpkinTycoonIslands) end
+    local things = Workspace:FindFirstChild("__THINGS")
+    if things then
+        if things:FindFirstChild("Plots") then table.insert(searchRoots, things.Plots) end
+        if things:FindFirstChild("Instances") then table.insert(searchRoots, things.Instances) end
+    end
+
+    for _, root in ipairs(searchRoots) do
+        for _, n in ipairs(testNames) do
+            local found = root:FindFirstChild(n, true)
+            if found then
+                if found:IsA("BasePart") then
+                    return found.CFrame + Vector3.new(0, 3, 0)
+                elseif found:IsA("Model") then
+                    if found.PrimaryPart then
+                        return found.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+                    else
+                        local p = found:FindFirstChildWhichIsA("BasePart", true)
+                        if p then
+                            return p.CFrame + Vector3.new(0, 3, 0)
+                        end
+                        return found:GetPivot() + Vector3.new(0, 3, 0)
+                    end
+                end
+            end
+            if root:IsA("Model") then
+                local attr = root:GetAttribute(n)
+                if typeof(attr) == "CFrame" then
+                    return attr + Vector3.new(0, 3, 0)
+                elseif typeof(attr) == "Vector3" then
+                    return CFrame.new(attr + Vector3.new(0, 3, 0))
+                end
+            end
         end
     end
     return nil
@@ -1705,10 +1735,10 @@ local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
     local padCF = FindMachinePadCFrame(plot, machineName)
     local moved = false
 
-    -- Nếu đứng xa máy (> 12 studs), tele tức thì đến bệ máy để thỏa mãn yêu cầu khoảng cách của server
-    if hrp and padCF and (hrp.Position - padCF.Position).Magnitude > 12 then
+    -- Nếu đứng xa máy (> 8 studs), tele tức thì đến bệ máy để thỏa mãn yêu cầu khoảng cách của server
+    if hrp and padCF and (hrp.Position - padCF.Position).Magnitude > 8 then
         hrp.CFrame = padCF
-        task.wait(0.12) -- Chờ server đồng bộ tọa độ nhân vật đứng trên máy
+        task.wait(0.15) -- Chờ server đồng bộ tọa độ nhân vật đứng trên máy
         moved = true
     end
 
@@ -1813,6 +1843,29 @@ local function GetIslandBox(plot)
     return Runtime.Cache.IslandBox
 end
 
+local function EnsureCharacterOnIsland(plot)
+    if not plot or not IsInEventInstance() then return end
+    if Runtime.Stats.IsHatching or (Runtime.State and (Runtime.State.CatchingSighting or Runtime.State.FightingTurkey)) then
+        return
+    end
+    local _, hrp = GetCharacter()
+    if not hrp then return end
+
+    local islandBox = GetIslandBox(plot)
+    if not islandBox or not islandBox.cf then return end
+
+    local distToIsland = (hrp.Position - islandBox.cf.Position).Magnitude
+    local islandRadius = math.max(120, islandBox.size.Magnitude / 2)
+
+    -- Nếu nhân vật đứng ngoài đảo (ở khu spawn hoặc rơi khỏi đảo)
+    if distToIsland > islandRadius then
+        Log("INFO", "🚀 [IslandGuard] Nhân vật đang ở ngoài đảo (Spawn, dist=%d studs). Đang tele về bãi farm trên đảo...", math.floor(distToIsland))
+        local targetCF = (activeFarmTarget and activeFarmTarget.cf) or (islandBox.cf + Vector3.new(0, 4, 0))
+        hrp.CFrame = targetCF
+        task.wait(0.2)
+    end
+end
+
 local function IsOnMyIsland(model, islandBox)
     if not model or not model.Parent then
         return false
@@ -1900,6 +1953,7 @@ local function EnsureInPumpkinTycoon()
         local plot = GetMyPlot()
         if IsInEventInstance() and plot then
             Log("INFO", "Entered %s plot ID: %s", INSTANCE_ID, tostring(plot:GetId()))
+            pcall(EnsureCharacterOnIsland, plot)
             return plot
         end
         task.wait(0.2)
@@ -2570,10 +2624,13 @@ local function StepFarmTargeter(plot)
         or (chosen.isPedestal and ("Ped-Rung-" .. tostring(chosen.rung)) or ("Zone-" .. tostring(chosen.zone or 1)))
 
     -- Never steal character position while active Hatch loop or Machine Pad action holds position lock
-    if Config.AutoTeleportToTarget and not Runtime.Stats.IsHatching and not IsMoveLocked() then
+    if not Runtime.Stats.IsHatching and not IsMoveLocked() then
         local reach = GetTapReach()
         local moveRange = math.max(10, reach - 5)
-        if chosen.dist > moveRange then
+        -- Nếu nhân vật đứng quá xa bãi farm (> 90 studs, ví dụ ở spawn hoặc bay ra ngoài), luôn đưa nhân vật về bãi farm!
+        if chosen.dist > 90 then
+            MoveNear(chosen.pos, moveRange)
+        elseif Config.AutoTeleportToTarget and chosen.dist > moveRange then
             MoveNear(chosen.pos, moveRange)
         end
     end
@@ -4834,47 +4891,27 @@ local function StepWildPets(plot)
     -- 1. Quét kiểm tra kho lưới hiện có
     local petNets, ultraNets = GetAvailablePetNets(plot)
     local totalNets = petNets + ultraNets
-
     local char, hrp = GetCharacter()
 
-    -- =========================================================================
-    -- TRƯỜNG HỢP A: HẾT LƯỚI TRONG TÚI (totalNets <= 0)
-    -- Tele về bãi farm, tắt auto farm và chờ merchant restock net
-    -- =========================================================================
+    -- Nếu hết toàn bộ lưới -> Trở về bãi farm tiếp tục farm bãi breakable và chờ Merchant restock lưới
     if totalNets <= 0 then
         if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF then
             WildPetsState.IsCatchingSession = false
-            -- Teleport quay trở lại bãi farm ban đầu
             if hrp and WildPetsState.SavedFarmCF then
-                Log("INFO", "🎯 [WildPets] ĐÃ HẾT LƯỚI TRONG TÚI! Đang tele về lại bãi farm...")
+                Log("INFO", "🎯 [WildPets] Hết lưới trong túi. Tele về lại bãi farm tiếp tục đào pumpkin & chờ Merchant restock...")
                 hrp.CFrame = WildPetsState.SavedFarmCF
                 WildPetsState.SavedFarmCF = nil
                 task.wait(0.2)
             end
-            -- Đặt cờ tạm dừng farm để nhân vật đứng yên chờ merchant restock lưới
-            Runtime.State.WaitingNetsRestock = true
-            Log("INFO", "💤 [WildPets] Đã về bãi farm. Tắt auto farm, chờ Merchant restock lưới...")
         end
         return
     end
 
-    -- =========================================================================
-    -- TRƯỜNG HỢP B: CÓ LƯỚI TRONG TÚI (totalNets > 0)
-    -- Bật auto farm ở zone hiện tại và tele đến điểm bắt pet để bắt cho đến khi hết net
-    -- =========================================================================
-    Runtime.State.WaitingNetsRestock = false -- Bật lại auto farm
-    WildPetsState.IsCatchingSession = true
-
-    -- Lưu tọa độ bãi farm hiện tại nếu chưa lưu
-    if hrp and not WildPetsState.SavedFarmCF then
-        WildPetsState.SavedFarmCF = hrp.CFrame
-    end
-
-    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 3.0) then
+    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 2.5) then
         return
     end
 
-    -- A. Ưu tiên số 1: Bắt Rare / Huge Sightings nếu xuất hiện
+    -- A. Ưu tiên số 1: Bắt Rare / Huge Sightings nếu xuất hiện (Dùng Ultra Pet Net)
     if Config.AutoCatchSightings and PT_Turkey and PT_Turkey.Sighting then
         local okS, sighting = pcall(PT_Turkey.Sighting)
         if okS and sighting then
@@ -4888,21 +4925,29 @@ local function StepWildPets(plot)
                 local sPhys = PT_Turkey.Physical()
                 if sPhys then sightPos = sPhys:GetPivot().Position end
             end
+            if hrp and not WildPetsState.SavedFarmCF then
+                WildPetsState.SavedFarmCF = hrp.CFrame
+            end
             if hrp and sightPos then
                 hrp.CFrame = CFrame.new(sightPos + Vector3.new(0, 3, 0))
                 task.wait(0.08)
             end
 
+            local sNet = (ultraNets > 0) and "Ultra Pet Net" or "Pet Net"
             local okSight, resSight = pcall(function()
-                return plot:Invoke(NET.CatchSighting, (type(sighting) == "table" and (sighting.Id or sighting.Slot)) or sighting or 1, "Ultra Pet Net")
+                return plot:Invoke(NET.CatchSighting, (type(sighting) == "table" and (sighting.Id or sighting.Slot)) or sighting or 1, sNet)
             end)
             WildPetsState.LastThrowAt = now
             if okSight and (resSight == true or (type(resSight) == "table" and resSight.Success ~= false)) then
                 WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
                 Runtime.Stats.WildCaught = WildPetsState.CaughtCount
-                Log("INFO", "🌟 [WildPets] Bắt thành công Rare Sighting!")
+                Log("INFO", "🌟 [WildPets] Bắt thành công Rare Sighting bằng %s!", sNet)
             end
-            task.wait(0.5)
+            if hrp and WildPetsState.SavedFarmCF then
+                hrp.CFrame = WildPetsState.SavedFarmCF
+                WildPetsState.SavedFarmCF = nil
+            end
+            task.wait(0.3)
             Runtime.State.CatchingSighting = false
             return
         end
@@ -4915,12 +4960,8 @@ local function StepWildPets(plot)
     local tierMap = { ["Any"] = 0, ["Uncommon+"] = 1, ["Rare+"] = 2, ["Epic+"] = 3, ["Huges only"] = 4 }
     local minTier = tierMap[Config.WildMinTier] or 0
 
-    local bestSlot = nil
-    local bestScore = -1
-    local bestIsHuge = false
-    local bestPetId = ""
-    local bestPhys = nil
-    local bestPetPos = nil
+    local hugeCandidates = {}
+    local normalCandidates = {}
 
     for slotKey, info in pairs(wildData) do
         local slotNum = tonumber(slotKey)
@@ -4928,15 +4969,17 @@ local function StepWildPets(plot)
             local petId = tostring(info.P or info.PetId or "")
             local isHuge = string.find(petId, "Huge") ~= nil or string.find(petId, "Titanic") ~= nil or string.find(petId, "Gargantuan") ~= nil
             local tier = isHuge and 4 or (tonumber(info.Tier) or 0)
-            local isVariant = (info.G == true or info.R == true or info.S == true)
+            local isShiny = (info.S == true)
+            local isRainbow = (info.R == true)
+            local isGolden = (info.G == true)
+            local isVariant = (isShiny or isRainbow or isGolden)
 
-            local valid = (tier >= minTier)
-            if Config.WildVariantsOnly and not isVariant then
+            local valid = isHuge or (tier >= minTier)
+            if Config.WildVariantsOnly and not isVariant and not isHuge then
                 valid = false
             end
 
             if valid then
-                -- Tìm vị trí physical của pet để tele đến
                 local phys = PT_Wild and PT_Wild.Physical and PT_Wild.Physical(slotNum)
                 local petPos = nil
                 if phys then
@@ -4944,62 +4987,105 @@ local function StepWildPets(plot)
                         or (phys:IsA("BasePart") and phys.Position)
                 end
 
-                local score = (isHuge and 1000 or 0) + (info.R and 300 or (info.S and 200 or (info.G and 100 or 0))) + (tier * 10)
-                if score > bestScore then
-                    bestScore = score
-                    bestSlot = slotNum
-                    bestIsHuge = isHuge
-                    bestPetId = petId
-                    bestPhys = phys
-                    bestPetPos = petPos
+                -- Quy tắc chấm điểm theo chuẩn dj: Shiny (5000) > Rainbow (3000) > Golden (1000) > Tier * 100
+                local variantScore = (isShiny and 5000 or 0) + (isRainbow and 3000 or 0) + (isGolden and 1000 or 0) + (tier * 100)
+
+                local cand = {
+                    slot = slotNum,
+                    petId = petId,
+                    isHuge = isHuge,
+                    tier = tier,
+                    isShiny = isShiny,
+                    isRainbow = isRainbow,
+                    isGolden = isGolden,
+                    score = variantScore,
+                    phys = phys,
+                    pos = petPos,
+                }
+
+                if isHuge then
+                    table.insert(hugeCandidates, cand)
+                else
+                    table.insert(normalCandidates, cand)
                 end
             end
         end
     end
 
-    if bestSlot then
-        WildPetsState.LastThrowAt = now
+    local function SortCandidates(a, b)
+        return a.score > b.score
+    end
+    table.sort(hugeCandidates, SortCandidates)
+    table.sort(normalCandidates, SortCandidates)
 
-        -- CHỌN LOẠI LƯỚI PHÙ HỢP
-        local netType = "Pet Net"
-        local netIdx = 1
-        if ultraNets > 0 and (bestIsHuge or not Config.WildUltraOnHugesOnly) then
+    local targetPet = nil
+    local netType = "Pet Net"
+    local netIdx = 1
+
+    -- =========================================================================
+    -- QUY TẮC CATCH PET CỦA DJ:
+    -- 1. NẾU LÀ HUGE: Ưu tiên tuyệt đối số 1 -> Tele đến pet và dùng Ultra Pet Net!
+    -- 2. NẾU KHÔNG CÓ HUGE: Bắt pet thường (tele đến pet và bắt bằng Pet Net), ưu tiên Shiny > RB > Golden!
+    -- =========================================================================
+    if #hugeCandidates > 0 then
+        targetPet = hugeCandidates[1]
+        if ultraNets > 0 then
             netType = "Ultra Pet Net"
             netIdx = 2
         elseif petNets > 0 then
             netType = "Pet Net"
             netIdx = 1
-        elseif ultraNets > 0 then
-            netType = "Ultra Pet Net"
-            netIdx = 2
+            Log("WARNING", "⚠️ [WildPets] Phát hiện Huge (%s) nhưng hết Ultra Pet Net! Thử ném bằng Pet Net thường...", targetPet.petId)
+        else
+            Log("WARNING", "⚠️ [WildPets] Phát hiện Huge (%s) nhưng hết sạch lưới trong túi! Đang chờ mua...", targetPet.petId)
+            return
+        end
+    elseif #normalCandidates > 0 then
+        if petNets > 0 then
+            targetPet = normalCandidates[1]
+            netType = "Pet Net"
+            netIdx = 1
+        else
+            -- Hết Pet Net thường -> Giữ lại Ultra Pet Net CHỈ để săn Huge! Không lãng phí Ultra Net cho pet thường.
+            return
+        end
+    end
+
+    if targetPet then
+        WildPetsState.LastThrowAt = now
+        WildPetsState.IsCatchingSession = true
+
+        -- Lưu vị trí bãi farm trước khi tele
+        if hrp and not WildPetsState.SavedFarmCF then
+            WildPetsState.SavedFarmCF = hrp.CFrame
         end
 
-        -- TELEPORT TRỰC TIẾP ĐẾN ĐIỂM BẮT PET ĐỂ NÉM LƯỚI
-        if hrp and bestPetPos then
-            hrp.CFrame = CFrame.new(bestPetPos + Vector3.new(0, 3, 0))
-            task.wait(0.08) -- Đồng bộ vị trí với server để vượt qua kiểm tra REACH
+        -- Teleport trực tiếp đến vị trí pet
+        if hrp and targetPet.pos then
+            hrp.CFrame = CFrame.new(targetPet.pos + Vector3.new(0, 3, 0))
+            task.wait(0.08) -- Đồng bộ tọa độ với server để vượt qua kiểm tra khoảng cách (REACH)
         end
 
         -- 1. Kích hoạt module ném của client
         if PT_Nets and PT_Nets.Throw then
             pcall(function()
-                if bestPhys then
-                    PT_Nets.Throw(bestPhys, netType)
+                if targetPet.phys then
+                    PT_Nets.Throw(targetPet.phys, netType)
                 else
-                    PT_Nets.Throw(bestSlot, netType)
+                    PT_Nets.Throw(targetPet.slot, netType)
                 end
             end)
         end
 
         -- 2. Gọi Server Network Remote RU_Ensnare
         local okThrow, resThrow = pcall(function()
-            return plot:Invoke(NET.CatchWild, bestSlot, netType)
+            return plot:Invoke(NET.CatchWild, targetPet.slot, netType)
         end)
 
         -- 3. Fallback truyền dạng số (index 1 / 2) nếu truyền tên chuỗi chưa được server nhận
         if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
             local okIdx, resIdx = pcall(function()
-                return plot:Invoke(NET.CatchWild, bestSlot, netIdx)
+                return plot:Invoke(NET.CatchWild, targetPet.slot, netIdx)
             end)
             if okIdx and (resIdx == true or (type(resIdx) == "table" and resIdx.Success ~= false)) then
                 okThrow = true
@@ -5012,11 +5098,19 @@ local function StepWildPets(plot)
         if isSuccess then
             WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
             Runtime.Stats.WildCaught = WildPetsState.CaughtCount
-            Log("INFO", "🎯 [WildPets] BẮT THÀNH CÔNG pet slot #%d (%s) bằng %s! (Tổng bắt: %d)",
-                bestSlot, tostring(bestPetId), netType, WildPetsState.CaughtCount)
+            Log("INFO", "🎯 [WildPets] %s BẮT THÀNH CÔNG pet slot #%d (%s, Shiny=%s, RB=%s, Gold=%s) bằng %s! (Tổng bắt: %d)",
+                targetPet.isHuge and "🌟 [HUGE]" or "🐾",
+                targetPet.slot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
+                netType, WildPetsState.CaughtCount)
         else
             Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, net: %s) -> Server: %s",
-                bestSlot, tostring(bestPetId), netType, tostring(resThrow))
+                targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
+        end
+
+        -- Sau khi ném lưới xong, quay trở lại bãi farm ngay lập tức
+        if hrp and WildPetsState.SavedFarmCF then
+            hrp.CFrame = WildPetsState.SavedFarmCF
+            WildPetsState.SavedFarmCF = nil
         end
     else
         -- Không có pet nào phù hợp để bắt -> Quay lại bãi farm
@@ -5034,7 +5128,7 @@ local lastPetNetStoreCheck = 0
 local function StepPetNetMerchant(plot)
     if not Config.AutoBuyNetsMerchant or not plot then return end
     local now = os.clock()
-    local interval = tonumber(Config.PetNetStoreInterval) or 10
+    local interval = tonumber(Config.PetNetStoreInterval) or 3
     if (now - lastPetNetStoreCheck) < interval then return end
     lastPetNetStoreCheck = now
 
@@ -5053,12 +5147,12 @@ local function StepPetNetMerchant(plot)
 
         -- 3. Gọi Remote Tycoon mua trực tiếp lưới từ Net Store trên đảo (NET.BuyNet = "ZK_Barter")
         pcall(function()
+            -- Mua Ultra Pet Net (ưu tiên hàng đầu)
+            plot:Invoke(NET.BuyNet, "Ultra Pet Net", 5)
+            plot:Invoke(NET.BuyNet, 2, 5)
             -- Mua Pet Net thường
-            plot:Invoke(NET.BuyNet, "Pet Net", 5)
-            plot:Invoke(NET.BuyNet, 1, 5)
-            -- Mua Ultra Pet Net
-            plot:Invoke(NET.BuyNet, "Ultra Pet Net", 2)
-            plot:Invoke(NET.BuyNet, 2, 2)
+            plot:Invoke(NET.BuyNet, "Pet Net", 10)
+            plot:Invoke(NET.BuyNet, 1, 10)
         end)
 
         -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
@@ -6158,12 +6252,6 @@ local function StartLoops()
                 or (not activeFarmTarget.model)
                 or (not activeFarmTarget.model.Parent)
             local waitingSpawn = (Runtime.Stats.ActiveTargetDesc == "Waiting spawn")
-            -- Nếu đang chờ restock lưới theo yêu cầu của dj -> Tạm thời tắt auto farm
-            if Runtime.State.WaitingNetsRestock then
-                task.wait(0.5)
-                continue
-            end
-
             local dueForScan = (now - lastTargetScan) >= (targetDead and 0.05 or (Config.FarmLoopInterval or 0.25))
             if (targetDead and not waitingSpawn) or dueForScan then
                 lastTargetScan = now
@@ -6171,6 +6259,7 @@ local function StartLoops()
                     if IsInEventInstance() then
                         local plot = GetMyPlot()
                         if plot then
+                            EnsureCharacterOnIsland(plot)
                             StepFarmTargeter(plot)
                         end
                     end
