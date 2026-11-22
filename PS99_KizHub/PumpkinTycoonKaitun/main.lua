@@ -128,15 +128,15 @@ local DEFAULT_CONFIG = {
     -- Egg Hatching (Smart Early Bootstrap + Post-Buttons Zone 5)
     AutoHatch = true,
     AutoEarlyHatchForDamage = true, -- Hatch unlocked eggs during rush when slots < MaxPetsEquipped or power < egg common pet
-    EarlyHatchMaxPerEgg = 8,        -- Cap early bootstrap hatches per unlocked egg tier
+    EarlyHatchMaxPerEgg = 3,        -- Cap early bootstrap hatches (mở 3 lần mỗi bậc trứng để lấy pet rồi tích tiền mua nút tiếp theo)
     EarlyHatchReserveCoins = true,  -- Temporarily reserve 1x egg cost during early bootstrap before buying buttons
     AutoEquipBestPets = true,       -- Ensure AutoEquipPets / EquipBest equips newly hatched stronger pets immediately
     TargetEggName = "Best",             -- "Best" (highest unlocked egg) or specific egg name ("Zone8_Egg", "Golden Grove Egg", etc.)
     FallbackHighestUnlockedEgg = true,  -- If specified egg not unlocked yet, automatically fallback to highest unlocked egg
     HatchDisableAnimation = true,
     HatchMinBatchMultiplier = 1,    -- Start hatching when Coins >= cost * maxBatch * mult (or >= cost * 1)
-    HatchMoveMaxDist = 24,          -- [STAND-EGG]: Giu khoang cach toi da 24 studs tu egg (chi dinh vi lai neu bi day qua xa)
-    HatchStandDistance = 15,        -- [STAND-EGG]: Dung cach qua trung 15 studs (tang them 5 stud) truc dien mat truoc
+    HatchMoveMaxDist = 28,          -- [STAND-EGG]: Giu khoang cach toi da 28 studs tu egg (chi dinh vi lai neu bi day qua xa)
+    HatchStandDistance = 20,        -- [STAND-EGG]: Dung cach qua trung 20 studs (tang them 5 stud) truc dien mat truoc
     HatchFrontOffsetSign = -1,      -- [STAND-EGG]: -1 dao nguoc LookVector de dung mat truoc (tranh bi tele ra sau lung egg)
     HatchCooldown = 0.05,
 
@@ -294,6 +294,7 @@ local Runtime = {
         EggCostCache = {},
         EggBasePowerCache = {},
         EarlyHatchedByEgg = {},
+        EarlyHatchedTimesByEgg = {},
         ReserveEarlyEggCost = 0,
         LastEquipBestAt = 0,
         TeamPowerSnapshot = nil,
@@ -2671,7 +2672,8 @@ local function StepButtonsAndComplete(plot)
     local priceMult = GetButtonPriceMult()
     local coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
 
-    if EvaluateEarlyBootstrap and not part1Complete then
+    local isFinalStage = (Runtime.Stats and Runtime.Stats.NextButtonName == "Đã xong tất cả")
+    if EvaluateEarlyBootstrap and not isFinalStage then
         EvaluateEarlyBootstrap(plot, buttons)
     else
         Runtime.Cache.ReserveEarlyEggCost = 0
@@ -2680,7 +2682,7 @@ local function StepButtonsAndComplete(plot)
     -- Burst buy all currently affordable unlocked buttons in progression priority order
     local boughtThisPass = 0
     while IsRunning() and boughtThisPass < 100 do
-        if Config.RushButtonsFirst and not part1Complete and Runtime.Stats.IsHatching then
+        if Config.RushButtonsFirst and not isFinalStage and Runtime.Stats.IsHatching then
             break
         end
         local spendableCoins = math.max(0, coins - (Runtime.Cache.ReserveEarlyEggCost or 0))
@@ -2757,7 +2759,7 @@ local function StepButtonsAndComplete(plot)
         Log("INFO", "Bought Button [%s] (%s) for %s Coins", pick.btn.Id, tostring(pick.btn.Display), tostring(pick.price))
         buttons, part1Complete, claimedComplete = GetProgressState(plot)
         coins = Runtime.Stats.Coins
-        if EvaluateEarlyBootstrap and not part1Complete then
+        if EvaluateEarlyBootstrap and not isFinalStage then
             EvaluateEarlyBootstrap(plot, buttons)
         else
             Runtime.Cache.ReserveEarlyEggCost = 0
@@ -3542,8 +3544,24 @@ local function ResolveTargetEgg(plot, buttons, preferHighestUnlocked)
     return targetEggInfo.ButtonId, targetEggInfo.Name, eggPos, 8, eggCF
 end
 
+local function IsFinalEggTier(eggName)
+    if not eggName then return false end
+    if eggName == "Golden Ridge Egg" or eggName == "Zone8_Egg" then
+        return true
+    end
+    for _, info in ipairs(PUMPKIN_EGG_ZONES) do
+        if (info.Name == eggName or info.ButtonId == eggName) and info.Zone >= 8 then
+            return true
+        end
+    end
+    if Runtime.Stats and Runtime.Stats.NextButtonName == "Đã xong tất cả" then
+        return true
+    end
+    return false
+end
+
 EvaluateEarlyBootstrap = function(plot, buttons)
-    if not Config.AutoHatch or not Config.AutoEarlyHatchForDamage or not plot then
+    if not Config.AutoHatch or not plot then
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
     end
@@ -3553,26 +3571,24 @@ EvaluateEarlyBootstrap = function(plot, buttons)
         return false
     end
 
-    local maxEarly = math.max(1, math.floor(tonumber(Config.EarlyHatchMaxPerEgg) or 8))
-    local hatchedHere = Runtime.Cache.EarlyHatchedByEgg[eggName] or 0
-    if hatchedHere >= maxEarly then
+    -- Nếu là egg cuối cùng (Zone 8 / Golden Ridge Egg hoặc xong hết buttons), không giới hạn bootstrap mà mở infinite
+    if IsFinalEggTier(eggName) then
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
     end
 
-    local targetCommonPw = GetEggCommonPower(eggName)
-    local snap = GetTeamPowerSnapshot(false)
-    local needsSlots = snap.ownedTotal < snap.maxEquip
-    local needsPower = (targetCommonPw > 0) and (snap.weakest < (targetCommonPw * 0.99))
-    if not needsSlots and not needsPower then
+    local maxTimes = math.max(1, math.floor(tonumber(Config.EarlyHatchMaxPerEgg) or 3))
+    local timesHatched = Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0
+    if timesHatched >= maxTimes then
+        -- Đã mở đủ 3 lần trên bậc trứng này! Dừng hatch để tích tiền mua button tiếp theo!
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
     end
 
     local eggCost = GetEggPrice(eggName)
     Runtime.Cache.ReserveEarlyEggCost = (Config.EarlyHatchReserveCoins ~= false) and eggCost or 0
-    local remainingCap = maxEarly - hatchedHere
-    return true, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF
+    local remainingTimes = maxTimes - timesHatched
+    return true, eggUid, eggName, eggPos, eggMax, eggCost, remainingTimes, eggCF
 end
 
 local function StepHatch(plot, buttons, part1Complete)
@@ -3582,24 +3598,30 @@ local function StepHatch(plot, buttons, part1Complete)
     end
 
     local isEarly = false
-    local eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF
+    local eggUid, eggName, eggPos, eggMax, eggCost, remainingTimes, eggCF
 
-    if Config.RushButtonsFirst and not part1Complete then
+    -- Xác định quả trứng tốt nhất hiện có trên plot
+    eggUid, eggName, eggPos, eggMax, eggCF = ResolveTargetEgg(plot, buttons, false)
+    if not eggUid or not eggPos then
+        Runtime.Stats.IsHatching = false
+        return
+    end
+    eggCost = GetEggPrice(eggName)
+
+    local isFinal = IsFinalEggTier(eggName)
+
+    if not isFinal and Config.RushButtonsFirst then
+        -- Với các egg trung gian (Zone 1..7): Mở tầm 3 lần để lấy pet rồi dừng, tích tiền mua button tiếp theo
         local needEarly
-        needEarly, eggUid, eggName, eggPos, eggMax, eggCost, remainingCap, eggCF = EvaluateEarlyBootstrap(plot, buttons)
+        needEarly, eggUid, eggName, eggPos, eggMax, eggCost, remainingTimes, eggCF = EvaluateEarlyBootstrap(plot, buttons)
         if not needEarly then
             Runtime.Stats.IsHatching = false
             return
         end
         isEarly = true
     else
+        -- EGG CUỐI CÙNG (Zone 8 / Golden Ridge Egg hoặc xong hết buttons): MỞ INFINITE LIÊN TỤC!
         Runtime.Cache.ReserveEarlyEggCost = 0
-        eggUid, eggName, eggPos, eggMax, eggCF = ResolveTargetEgg(plot, buttons, false)
-        if not eggUid or not eggPos then
-            Runtime.Stats.IsHatching = false
-            return
-        end
-        eggCost = GetEggPrice(eggName)
     end
 
     local maxHatch = 8
@@ -3611,9 +3633,6 @@ local function StepHatch(plot, buttons, part1Complete)
     end
     if type(eggMax) == "number" and eggMax >= 1 then
         maxHatch = math.min(maxHatch, eggMax)
-    end
-    if isEarly and type(remainingCap) == "number" then
-        maxHatch = math.min(maxHatch, math.max(1, remainingCap))
     end
 
     local coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
@@ -3636,19 +3655,20 @@ local function StepHatch(plot, buttons, part1Complete)
     end
 
     Runtime.Stats.IsHatching = true
-    Runtime.Stats.Phase = (isEarly and "Early Hatch " or "Hatching ") .. eggName
+    Runtime.Stats.Phase = (isEarly and string.format("Early Hatch %s (%d/3)", eggName, (Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0) + 1)
+        or ("Infinite Hatch " .. eggName))
     SuppressEggAnimation()
 
     Runtime.Cache.HatchInFlight = true
     local _, hrp = GetCharacter()
-    local maxDist = Config.HatchMoveMaxDist or 24
-    local standDist = Config.HatchStandDistance or 15
+    local maxDist = Config.HatchMoveMaxDist or 28
+    local standDist = Config.HatchStandDistance or 20
     if hrp and HorizontalDist(hrp.Position, eggPos) > maxDist then
         if not IsMoveLocked() then
             local standPos
             local sign = Config.HatchFrontOffsetSign or -1
             if typeof(eggCF) == "CFrame" and eggCF.LookVector.Magnitude > 0.5 then
-                -- Dung truc dien mat truoc qua trung (sign = -1 dao nguoc LookVector neu bệ quay nguoc)
+                -- Đứng trực diện mặt trước quả trứng cách 20 studs (đã tăng thêm 5 stud theo yêu cầu dj)
                 standPos = eggCF.Position + (eggCF.LookVector * (standDist * sign)) + Vector3.new(0, 1.5, 0)
             else
                 local plotModel = plot and plot.GetModel and plot:GetModel()
@@ -3682,11 +3702,15 @@ local function StepHatch(plot, buttons, part1Complete)
         pcall(CheckNewHugeWatcher)
         if isEarly then
             Runtime.Stats.EarlyEggsHatched = Runtime.Stats.EarlyEggsHatched + batch
+            Runtime.Cache.EarlyHatchedTimesByEgg[eggName] = (Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0) + 1
             Runtime.Cache.EarlyHatchedByEgg[eggName] = (Runtime.Cache.EarlyHatchedByEgg[eggName] or 0) + batch
             Runtime.Cache.TeamPowerSnapshotAt = 0
             GetTeamPowerSnapshot(true)
-            Log("INFO", "Early-hatched %dx [%s] (%d/%d for tier) for damage boost",
-                batch, eggName, Runtime.Cache.EarlyHatchedByEgg[eggName], Config.EarlyHatchMaxPerEgg or 8)
+            local currentTimes = Runtime.Cache.EarlyHatchedTimesByEgg[eggName]
+            local maxTimes = Config.EarlyHatchMaxPerEgg or 3
+            Log("INFO", "Early-hatched %dx [%s] (Lần mở %d/%d)%s",
+                batch, eggName, currentTimes, maxTimes,
+                (currentTimes >= maxTimes) and " -> Đã đủ 3 lần! Dừng hatch để tích tiền mua button tiếp theo!" or "")
             EnsureBestPetsEquipped(true)
             task.delay(0.15, function()
                 if IsRunning() then
