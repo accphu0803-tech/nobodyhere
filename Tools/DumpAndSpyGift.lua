@@ -199,14 +199,7 @@ rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     if (method == "FireServer" or method == "InvokeServer") and typeof(self) == "Instance" and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
         local args = { ... }
-        if method == "InvokeServer" then
-            local results = { rawNamecall(self, ...) }
-            task.spawn(LogCapturedRemote, self, method, args, results[1])
-            return table.unpack(results)
-        else
-            task.spawn(LogCapturedRemote, self, method, args, nil)
-            return rawNamecall(self, ...)
-        end
+        task.spawn(LogCapturedRemote, self, method, args, nil)
     end
     return rawNamecall(self, ...)
 end))

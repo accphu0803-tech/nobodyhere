@@ -3144,21 +3144,22 @@ local function StepOpenFlannelGifts()
         return
     end
 
-    local giftName = (Modules.ButtonsTypes and Modules.ButtonsTypes.COMPLETION_GIFT) or "Flannel Gift"
+    local giftName = "Flannel Gift"
     local giftUid, giftAmt, giftCategory = nil, 0, nil
 
-    -- 1. Quét sâu toàn bộ Inventory (quét mọi mục: Lootbox, Consumable, Gift, Box, Misc, Egg...)
+    -- 1. Quét tìm chính xác Flannel Gift trong Inventory (Ưu tiên tuyệt đối Flannel Gift, không để quà khác chen ngang)
     if Modules.Save and Modules.Save.Get then
         pcall(function()
             local inv = Modules.Save.Get().Inventory
             if type(inv) ~= "table" then return end
-            for catName, catTable in pairs(inv) do
-                if type(catTable) == "table" and catName ~= "Pet" and catName ~= "Currency" then
+            local priorityCats = { "Lootbox", "Box", "Misc", "Consumable" }
+            for _, catName in ipairs(priorityCats) do
+                local catTable = inv[catName]
+                if type(catTable) == "table" then
                     for uid, d in pairs(catTable) do
                         if type(d) == "table" then
                             local boxId = tostring(d.id or d._id or d.Name or "")
-                            local lower = boxId:lower()
-                            if lower:find("flannel") or boxId == giftName or (lower:find("gift") and not lower:find("free")) then
+                            if boxId == "Flannel Gift" or boxId:lower():find("flannel") then
                                 giftUid = tostring(uid or d._uid or d.uid or "")
                                 giftName = boxId
                                 giftCategory = catName
@@ -3173,34 +3174,32 @@ local function StepOpenFlannelGifts()
         end)
     end
 
-    -- 2. Fallback quét qua Modules.LootboxItem
+    -- 2. Fallback quét qua Modules.LootboxItem nếu Save chưa nạp
     if not giftUid and Modules.LootboxItem then
         pcall(function()
-            local list = Modules.LootboxItem(giftName):FindAny()
-            local first = list and list[1]
-            if first then
-                giftUid = first:GetUID()
-                giftAmt = first:GetAmount()
-                giftCategory = "LootboxItem"
+            local list = Modules.LootboxItem("Flannel Gift"):FindAny()
+            if list and list._uid then
+                giftUid = tostring(list._uid)
+                giftAmt = tonumber(list._am or list.amount or list.Count) or 1
+                giftCategory = "Lootbox"
             end
         end)
     end
 
-    if not giftUid or giftAmt < 1 then
+    if not giftUid or giftAmt <= 0 then
         return
     end
 
-    local count = math.clamp(math.floor(math.min(giftAmt, Config.GiftBatchAmount or 8)), 1, 8)
-    local positions = BuildGiftPositions(count) or {}
-
     lastGiftAttempt = os.clock()
+    local maxBatch = math.clamp(tonumber(Config.GiftBatchAmount) or 8, 1, 8)
+    local count = math.min(giftAmt, maxBatch)
+    local positions = GetGroundPositions(count)
     local opened = false
     local debugRes = {}
 
-    -- Phương thức 1: Trực tiếp gọi RemoteFunction ReplicatedStorage.Network.YR_Hydrate khớp 100% Spy
+    -- Phương thức 1: Trực tiếp gọi RemoteFunction ReplicatedStorage.Network.YR_Hydrate (Remote mở Gift Tycoon chuẩn)
     local yrHydrate = (RS:FindFirstChild("Network") and RS.Network:FindFirstChild("YR_Hydrate")) or (Modules.Network and Modules.Network.YR_Hydrate)
     if yrHydrate and yrHydrate:IsA("RemoteFunction") then
-        -- 1A: Thử gọi chuẩn theo game client: (giftUid, count, positions, false)
         local ok1, res1 = pcall(function()
             return yrHydrate:InvokeServer(giftUid, count, positions, false)
         end)
@@ -3209,7 +3208,7 @@ local function StepOpenFlannelGifts()
             opened = true
         end
 
-        -- 1B: Nếu vị trí đất kẹt va chạm -> Thử gọi với cờ true (Instant Open / Skip Placement)
+        -- 1B: Nếu vị trí raycast kẹt -> Thử gọi với cờ true (Instant Open / Skip Placement)
         if not opened then
             local ok1B, res1B = pcall(function()
                 return yrHydrate:InvokeServer(giftUid, count, positions, true)
@@ -3220,7 +3219,7 @@ local function StepOpenFlannelGifts()
             end
         end
 
-        -- 1C: Gọi với positions rỗng và cờ true (Tránh hoàn toàn lỗi raycast mặt đất)
+        -- 1C: Gọi với positions rỗng và cờ true
         if not opened then
             local ok1C, res1C = pcall(function()
                 return yrHydrate:InvokeServer(giftUid, count, {}, true)
@@ -3232,23 +3231,7 @@ local function StepOpenFlannelGifts()
         end
     end
 
-    -- Phương thức 2: Gọi qua Modules.Network.Invoke("YR_Hydrate", ...)
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        local ok2A, res2A = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, positions, false)
-        debugRes.res2A = tostring(res2A)
-        if ok2A and (res2A == true or type(res2A) == "table") then
-            opened = true
-        end
-        if not opened then
-            local ok2B, res2B = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, {}, true)
-            debugRes.res2B = tostring(res2B)
-            if ok2B and (res2B == true or type(res2B) == "table") then
-                opened = true
-            end
-        end
-    end
-
-    -- Phương thức 3: Gọi qua Plot:Invoke(NET.GiftOpen, ...)
+    -- Phương thức 2: Gọi qua Plot:Invoke(NET.GiftOpen, ...) (Map đúng NET.GiftOpen = "YR_Hydrate")
     if not opened then
         pcall(function()
             local plot = GetMyPlot()
@@ -3262,24 +3245,27 @@ local function StepOpenFlannelGifts()
         end)
     end
 
+    -- Phương thức 3: Gọi qua RemoteFunction PumpkinTycoon_GiftOpen
+    if not opened then
+        local ptGiftOpen = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("PumpkinTycoon_GiftOpen")
+        if ptGiftOpen and ptGiftOpen:IsA("RemoteFunction") then
+            local okPt, resPt = pcall(function()
+                return ptGiftOpen:InvokeServer(giftUid, count)
+            end)
+            debugRes.resPt = tostring(resPt)
+            if okPt and (resPt == true or type(resPt) == "table") then
+                opened = true
+            end
+        end
+    end
+
     -- Phương thức 4: Remote Lootbox tiêu chuẩn PS99 ("Lootbox: Open")
     if not opened and Modules.Network and Modules.Network.Invoke then
         local ok4, res4 = pcall(function()
             return Modules.Network.Invoke("Lootbox: Open", giftName, count)
         end)
         debugRes.res4 = tostring(res4)
-        if ok4 and res4 ~= false then
-            opened = true
-        end
-    end
-
-    -- Phương thức 5: Remote Gift tiêu chuẩn PS99 ("Gift: Open")
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        local ok5, res5 = pcall(function()
-            return Modules.Network.Invoke("Gift: Open", giftUid, count)
-        end)
-        debugRes.res5 = tostring(res5)
-        if ok5 and res5 ~= false then
+        if ok4 and res4 ~= false and res4 ~= nil then
             opened = true
         end
     end
@@ -3289,11 +3275,11 @@ local function StepOpenFlannelGifts()
         Log("INFO", "🎁 [Flannel Gift] Mở thành công %dx %s! (Tổng đã mở: %d)", count, giftName, Runtime.Stats.GiftsOpened)
         pcall(CheckNewHugeWatcher)
     else
-        -- Backoff 4s khi thất bại để tránh spam remote
-        lastGiftAttempt = os.clock() + 4.0
-        Log("WARN", "🎁 [Flannel Gift] Thử mở %s (UID: %s, Mục: %s) chưa thành công! (1A=%s, 1B=%s, 1C=%s, 2A=%s, 4=%s, 5=%s)",
-            giftName, tostring(giftUid), tostring(giftCategory),
-            tostring(debugRes.res1), tostring(debugRes.res1B), tostring(debugRes.res1C), tostring(debugRes.res2A), tostring(debugRes.res4), tostring(debugRes.res5))
+        lastGiftAttempt = os.clock() + 3.0
+        Log("DEBUG", "🎁 [Flannel Gift] Mở %s (UID: %s) chưa hoàn tất. (1A=%s, 1B=%s, 1C=%s, 2=%s, 3=%s, 4=%s)",
+            giftName, tostring(giftUid),
+            tostring(debugRes.res1), tostring(debugRes.res1B), tostring(debugRes.res1C),
+            tostring(debugRes.res3), tostring(debugRes.resPt), tostring(debugRes.res4))
     end
 end
 
@@ -4664,6 +4650,50 @@ local WildPetsState = {
     LastSightingCheckAt = 0,
 }
 
+local function GetAvailablePetNets(plot)
+    local petNets = 0
+    local ultraNets = 0
+
+    -- 1. Quét từ Inventory Save.Get()
+    if Modules.Save and Modules.Save.Get then
+        pcall(function()
+            local inv = Modules.Save.Get().Inventory
+            if type(inv) == "table" then
+                local checkCats = { "Tool", "Misc", "Consumable" }
+                for _, catName in ipairs(checkCats) do
+                    local catTable = inv[catName]
+                    if type(catTable) == "table" then
+                        for _, item in pairs(catTable) do
+                            if type(item) == "table" then
+                                local id = tostring(item.id or item._id or item.Name or "")
+                                local amt = tonumber(item._am or item.amount or item.Count) or 1
+                                if id == "Pet Net" then
+                                    petNets = petNets + amt
+                                elseif id == "Ultra Pet Net" then
+                                    ultraNets = ultraNets + amt
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    -- 2. Quét từ Plot Save ("Nets") nếu tycoon lưu trữ số lưới riêng
+    if plot and plot.Save then
+        pcall(function()
+            local plotNets = plot:Save("Nets")
+            if type(plotNets) == "table" then
+                petNets = math.max(petNets, tonumber(plotNets["Pet Net"] or plotNets[1]) or 0)
+                ultraNets = math.max(ultraNets, tonumber(plotNets["Ultra Pet Net"] or plotNets[2]) or 0)
+            end
+        end)
+    end
+
+    return petNets, ultraNets
+end
+
 local function StepWildPets(plot)
     if not Config.AutoCatchWild or not plot then return end
     local now = os.clock()
@@ -4677,13 +4707,15 @@ local function StepWildPets(plot)
         if okS and sighting then
             Runtime.State.CatchingSighting = true
             Log("INFO", "🚨 RARE PET SIGHTING DETECTED! Deploying Ultra Pet Net...")
-            pcall(function()
-                -- Invoke directly via network remote to bypass buggy client animation interrupts
-                plot:Invoke(NET.CatchSighting, (type(sighting) == "table" and (sighting.Id or sighting.Slot)) or sighting or 1, "Ultra Pet Net")
+            local okSight, resSight = pcall(function()
+                return plot:Invoke(NET.CatchSighting, (type(sighting) == "table" and (sighting.Id or sighting.Slot)) or sighting or 1, "Ultra Pet Net")
             end)
             WildPetsState.LastThrowAt = now
-            WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
-            Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+            if okSight and (resSight == true or (type(resSight) == "table" and resSight.Success ~= false)) then
+                WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
+                Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+                Log("INFO", "🌟 [WildPets] Bắt thành công Rare Sighting!")
+            end
             task.wait(0.5)
             Runtime.State.CatchingSighting = false
             return
@@ -4697,9 +4729,17 @@ local function StepWildPets(plot)
     local tierMap = { ["Any"] = 0, ["Uncommon+"] = 1, ["Rare+"] = 2, ["Epic+"] = 3, ["Huges only"] = 4 }
     local minTier = tierMap[Config.WildMinTier] or 0
 
+    local _, hrp = GetCharacter()
+    local myPos = hrp and hrp.Position or Vector3.zero
+    -- Khoảng cách tương tác cho phép của server (REACH thường là 75-85 studs)
+    local maxReach = (PT_Cmds and SafeRequire and (SafeRequire(Library, "Client", "PumpkinTycoonCmds", "WildHover") or {}).REACH) or 80
+
     local bestSlot = nil
     local bestScore = -1
     local bestIsHuge = false
+    local bestPetId = ""
+    local bestPhys = nil
+    local bestDist = 9999
 
     for slotKey, info in pairs(wildData) do
         local slotNum = tonumber(slotKey)
@@ -4714,12 +4754,34 @@ local function StepWildPets(plot)
                 valid = false
             end
 
+            -- Xác định vị trí thực tế của Pet trong game world
+            local phys = PT_Wild and PT_Wild.Physical and PT_Wild.Physical(slotNum)
+            local dist = 9999
+            if phys and hrp then
+                local petPos = phys:IsA("Model") and (phys.PrimaryPart and phys.PrimaryPart.Position or phys:GetPivot().Position)
+                    or (phys:IsA("BasePart") and phys.Position)
+                if petPos then
+                    dist = (myPos - petPos).Magnitude
+                end
+            end
+
+            -- QUY TẮC NÉM XA: Nếu WildRemoteOnly = true, chỉ chọn những pet trong tầm REACH (<= maxReach + 5 studs)
+            -- để server không từ chối ném lưới vì lỗi khoảng cách
+            if Config.WildRemoteOnly and dist > (maxReach + 5) and not isHuge then
+                valid = false
+            end
+
             if valid then
-                local score = (isHuge and 1000 or 0) + (info.R and 300 or (info.S and 200 or (info.G and 100 or 0))) + (tonumber(info.Z) or 1) * 10 + (tier * 5)
+                -- Ưu tiên điểm: Huge (1000) > R/S/G variant > Gần nhân vật hơn (khoảng cách càng gần điểm càng cao)
+                local distBonus = math.max(0, 100 - dist)
+                local score = (isHuge and 1000 or 0) + (info.R and 300 or (info.S and 200 or (info.G and 100 or 0))) + (tier * 10) + distBonus
                 if score > bestScore then
                     bestScore = score
                     bestSlot = slotNum
                     bestIsHuge = isHuge
+                    bestPetId = petId
+                    bestPhys = phys
+                    bestDist = dist
                 end
             end
         end
@@ -4727,19 +4789,70 @@ local function StepWildPets(plot)
 
     if bestSlot then
         WildPetsState.LastThrowAt = now
-        local netType = "Pet Net"
-        if bestIsHuge or not Config.WildUltraOnHugesOnly then
-            netType = "Ultra Pet Net"
+
+        -- Kiểm tra lượng lưới hiện có
+        local petNets, ultraNets = GetAvailablePetNets(plot)
+
+        -- Tự động mua thêm lưới nếu sắp hết
+        if Config.AutoBuyNets and (petNets + ultraNets) < 3 then
+            pcall(function()
+                plot:Invoke(NET.SetAutoNets, true)
+                plot:Invoke(NET.BuyNet, "Pet Net", 5)
+                plot:Invoke(NET.BuyNet, 1, 5)
+            end)
         end
 
-        -- Đứng yên ném lưới từ xa (TUYỆT ĐỐI KHÔNG TELEPORT / KHÔNG DI CHUYỂN NHÂN VẬT)
-        -- Remote NET.CatchWild ("RU_Ensnare") gọi trực tiếp qua plot:Invoke với slot pet từ xa
-        local okThrow = pcall(function()
+        local netType = "Pet Net"
+        local netIdx = 1
+        if ultraNets > 0 and (bestIsHuge or not Config.WildUltraOnHugesOnly) then
+            netType = "Ultra Pet Net"
+            netIdx = 2
+        elseif petNets > 0 then
+            netType = "Pet Net"
+            netIdx = 1
+        elseif ultraNets > 0 then
+            netType = "Ultra Pet Net"
+            netIdx = 2
+        end
+
+        -- Bước 1: Gọi qua Client Module PT_Nets.Throw nếu có (kích hoạt animation client)
+        if PT_Nets and PT_Nets.Throw then
+            pcall(function()
+                if bestPhys then
+                    PT_Nets.Throw(bestPhys, netType)
+                else
+                    PT_Nets.Throw(bestSlot, netType)
+                end
+            end)
+        end
+
+        -- Bước 2: Gọi Server Network Remote RU_Ensnare
+        local okThrow, resThrow = pcall(function()
             return plot:Invoke(NET.CatchWild, bestSlot, netType)
         end)
-        if okThrow then
+
+        -- Bước 3: Fallback truyền dạng số (index 1 / 2) nếu truyền tên chuỗi chưa được server nhận
+        if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
+            local okIdx, resIdx = pcall(function()
+                return plot:Invoke(NET.CatchWild, bestSlot, netIdx)
+            end)
+            if okIdx and (resIdx == true or (type(resIdx) == "table" and resIdx.Success ~= false)) then
+                okThrow = true
+                resThrow = resIdx
+            end
+        end
+
+        -- BẮT BUỘC KIỂM TRA PHẢN HỒI THỰC TẾ TỪ SERVER:
+        -- Tuyệt đối KHÔNG tăng biến đếm nếu server trả về false / nil / Success = false
+        local isSuccess = okThrow and (resThrow == true or (type(resThrow) == "table" and (resThrow.Success == true or resThrow.Caught == true)))
+        if isSuccess then
             WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
             Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+            Log("INFO", "🎯 [WildPets] BẮT THÀNH CÔNG pet slot #%d (%s) bằng %s! (Tổng bắt: %d)",
+                bestSlot, tostring(bestPetId), netType, WildPetsState.CaughtCount)
+        else
+            Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, cách %.1f studs, net: %s) -> Server: %s",
+                bestSlot, tostring(bestPetId), bestDist or -1, netType, tostring(resThrow))
         end
     end
 
