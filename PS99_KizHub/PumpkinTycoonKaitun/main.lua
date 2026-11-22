@@ -1692,10 +1692,20 @@ local function FindMachinePadCFrame(plot, machineName)
     elseif lName:find("upgrade") then
         table.insert(testNames, "PadMarker_UpgradeMachine")
         table.insert(testNames, "UpgradeMachine")
+        table.insert(testNames, "PumpkinTycoonUpgradeMachine")
+        table.insert(testNames, "Upgrade Machine")
+        table.insert(testNames, "PumpkinTycoonUpgrade")
     end
 
     local searchRoots = {}
-    if plotModel then table.insert(searchRoots, plotModel) end
+    if plotModel then
+        table.insert(searchRoots, plotModel)
+        local btnFolder = plotModel:FindFirstChild("Buttons")
+        if btnFolder then table.insert(searchRoots, btnFolder) end
+    end
+    if plot and plot.Buttons then
+        table.insert(searchRoots, plot.Buttons)
+    end
     if Workspace:FindFirstChild("PumpkinTycoonPads") then table.insert(searchRoots, Workspace.PumpkinTycoonPads) end
     if Workspace:FindFirstChild("PumpkinTycoonIslands") then table.insert(searchRoots, Workspace.PumpkinTycoonIslands) end
     local things = Workspace:FindFirstChild("__THINGS")
@@ -1856,9 +1866,6 @@ end
 
 local function EnsureCharacterOnIsland(plot)
     if not plot or not IsInEventInstance() then return end
-    if Runtime.Stats.IsHatching or IsMoveLocked() or (Runtime.State and Runtime.State.ActiveTask ~= "FARMING") then
-        return
-    end
     local _, hrp = GetCharacter()
     if not hrp then return end
 
@@ -1870,10 +1877,28 @@ local function EnsureCharacterOnIsland(plot)
 
     -- Nếu nhân vật đứng ngoài đảo (ở khu spawn hoặc rơi khỏi đảo)
     if distToIsland > islandRadius then
+        if WildPetsState and WildPetsState.IsCatchingSession then
+            WildPetsState.IsCatchingSession = false
+            pcall(function()
+                if type(DisableNativeAutoFarm) == "function" then
+                    DisableNativeAutoFarm()
+                end
+            end)
+            WildPetsState.SavedFarmCF = nil
+            ReleaseMoveLock()
+            if Runtime.State then
+                Runtime.State.ActiveTask = "FARMING"
+            end
+        end
         Log("INFO", "🚀 [IslandGuard] Nhân vật đang ở ngoài đảo (Spawn, dist=%d studs). Đang tele về bãi farm trên đảo...", math.floor(distToIsland))
         local targetCF = (activeFarmTarget and activeFarmTarget.cf) or (islandBox.cf + Vector3.new(0, 4, 0))
         hrp.CFrame = targetCF
         task.wait(0.2)
+        return
+    end
+
+    if Runtime.Stats.IsHatching or IsMoveLocked() or (Runtime.State and Runtime.State.ActiveTask ~= "FARMING") then
+        return
     end
 end
 
@@ -3062,20 +3087,37 @@ local function GetTrackNextInfo(trackKey)
 end
 
 local function StepUpgrades(plot, buttons)
-    if not Config.AutoUpgrades or not plot or not Modules.UpgradesTypes or not Modules.PumpkinButtonsUtil then
+    if not Config.AutoUpgrades or not plot or not Modules.UpgradesTypes then
         return
     end
     -- Chuẩn dj: Nếu đang làm tác vụ khác (như Catch Pet), tuyệt đối không xen ngang tele đi mua nâng cấp!
     if Runtime.State and Runtime.State.ActiveTask ~= "FARMING" then
         return
     end
+
     local machineButton = Modules.UpgradesTypes.BUTTON or "UpgradeMachine"
-    if not Modules.PumpkinButtonsUtil.Owned(buttons, machineButton) then
+    local isOwned = false
+    if Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned and buttons then
+        local okOwn, owned = pcall(Modules.PumpkinButtonsUtil.Owned, buttons, machineButton)
+        if okOwn and owned == true then
+            isOwned = true
+        end
+    end
+    if not isOwned then
+        local pModel = (plot and plot.Model) or (plot and plot:FindFirstChild("Model"))
+        if pModel and (pModel:FindFirstChild("PumpkinTycoonUpgradeMachine", true) or pModel:FindFirstChild("UpgradeMachine", true)) then
+            isOwned = true
+        end
+    end
+    if not isOwned then
         return
     end
 
     local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
     Runtime.Stats.Tokens = tokens
+    if tokens <= 0 then
+        return
+    end
 
     local function FindAffordableUpgrade(currentTokens)
         local catchupRatio = tonumber(Config.UpgradeCheapCatchupRatio) or 0
@@ -3103,16 +3145,13 @@ local function StepUpgrades(plot, buttons)
         local selected = nil
         if pendingCheapTier1 and currentTokens >= pendingCheapTier1.cost then
             selected = pendingCheapTier1
-        elseif topCandidate then
+        elseif topCandidate and currentTokens >= topCandidate.cost then
+            selected = topCandidate
+        else
             for _, info in ipairs(infos) do
                 if currentTokens >= info.cost then
-                    if info == topCandidate then
-                        selected = info
-                        break
-                    elseif catchupRatio > 0 and info.cost <= (topCandidate.cost * catchupRatio) then
-                        selected = info
-                        break
-                    end
+                    selected = info
+                    break
                 end
             end
         end
@@ -3143,28 +3182,80 @@ local function StepUpgrades(plot, buttons)
                 break
             end
 
-            local ok, res = pcall(function()
-                return plot:Invoke(NET.UpgradeBuy, selected.track)
+            local trackKey = selected.track
+            local fullUpgradeId = (Modules.UpgradesTypes.Id and Modules.UpgradesTypes.Id(trackKey)) or ("PumpkinTycoon" .. trackKey)
+            local bought = false
+
+            -- 1. Thử qua plot:Invoke(NET.UpgradeBuy, trackKey)
+            local okPlot, resPlot = pcall(function()
+                return plot:Invoke(NET.UpgradeBuy, trackKey)
             end)
-            if not ok or res == false then
-                -- Fallback các Remote event khác nếu plot:Invoke chưa nhận
-                local boughtFallback = false
-                if Modules.Network and Modules.Network.Invoke then
-                    local okNet, resNet = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", selected.track)
-                    if okNet and resNet ~= false then boughtFallback = true end
-                    if not boughtFallback then
-                        local okNet2, resNet2 = pcall(Modules.Network.Invoke, "Upgrades_Purchase", selected.track)
-                        if okNet2 and resNet2 ~= false then boughtFallback = true end
-                    end
-                end
-                if not boughtFallback then
-                    break
+            if okPlot and resPlot ~= false and resPlot ~= nil then
+                bought = true
+            end
+
+            -- 2. Thử qua plot:Invoke(NET.UpgradeBuy, fullUpgradeId)
+            if not bought then
+                local okPlot2, resPlot2 = pcall(function()
+                    return plot:Invoke(NET.UpgradeBuy, fullUpgradeId)
+                end)
+                if okPlot2 and resPlot2 ~= false and resPlot2 ~= nil then
+                    bought = true
                 end
             end
 
-            Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-            Log("INFO", "Upgraded [%s] to Tier %d for %s Tokens", selected.track, selected.nextTier, tostring(selected.cost))
-            task.wait(0.08)
+            -- 3. Thử qua Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+            if not bought and Modules.Network and Modules.Network.Invoke then
+                local okNet, resNet = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", fullUpgradeId)
+                if okNet and resNet ~= false and resNet ~= nil then
+                    bought = true
+                end
+                if not bought then
+                    local okNetB, resNetB = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", trackKey)
+                    if okNetB and resNetB ~= false and resNetB ~= nil then
+                        bought = true
+                    end
+                end
+            end
+
+            -- 4. Thử trực tiếp qua ReplicatedStorage.Network["EventUpgrades: Purchase"]
+            local netFolder = RS:FindFirstChild("Network")
+            if not bought and netFolder then
+                local rEvUp = netFolder:FindFirstChild("EventUpgrades: Purchase")
+                if rEvUp and rEvUp:IsA("RemoteFunction") then
+                    local okRf, resRf = pcall(function()
+                        return rEvUp:InvokeServer(fullUpgradeId)
+                    end)
+                    if okRf and resRf ~= false and resRf ~= nil then
+                        bought = true
+                    end
+                    if not bought then
+                        local okRf2, resRf2 = pcall(function()
+                            return rEvUp:InvokeServer(trackKey)
+                        end)
+                        if okRf2 and resRf2 ~= false and resRf2 ~= nil then
+                            bought = true
+                        end
+                    end
+                end
+            end
+
+            -- 5. Fallback qua Upgrades_Purchase
+            if not bought and Modules.Network and Modules.Network.Invoke then
+                local okUp, resUp = pcall(Modules.Network.Invoke, "Upgrades_Purchase", fullUpgradeId)
+                if okUp and resUp ~= false and resUp ~= nil then
+                    bought = true
+                end
+            end
+
+            if bought then
+                Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+                Log("INFO", "🎯 [Upgrade Machine] Đã nâng cấp [%s] (%s) lên Tier %d (tốn %s Tokens)",
+                    trackKey, fullUpgradeId, selected.nextTier, tostring(selected.cost))
+                task.wait(0.08)
+            else
+                break
+            end
         end
     end)
 
@@ -3245,10 +3336,9 @@ local function StepConsumableBoosts()
 end
 
 local lastCocoaCheck = 0
-local function StepHotCocoaStand(plot, buttons, part1Complete)
-    if not Config.AutoCocoaStand or not plot or not Modules.PumpkinCocoaUtil or not Modules.PumpkinBoostsUtil then
-        return
-    end
+local function -- StepHotCocoaStand(plot, buttons, part1Complete) -- Bỏ qua theo lệnh dj
+    -- Bỏ qua Hot Cocoa Stand hoàn toàn theo lệnh dj
+    return
     if not Modules.PumpkinButtonsUtil or not Modules.PumpkinButtonsUtil.Owned(buttons, Modules.PumpkinCocoaUtil.BUTTON) then
         return
     end
@@ -3532,15 +3622,31 @@ local function StepOpenFlannelGifts()
     end
 
     -- Phương thức 5: Remote Function PumpkinTycoon_GiftOpen
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        local okPtNet, resPtNet = pcall(function()
+            return Modules.Network.Invoke("PumpkinTycoon_GiftOpen", giftName, count)
+        end)
+        if okPtNet and (resPtNet == true or type(resPtNet) == "table") then
+            opened = true
+        end
+    end
     if not opened and netFolder then
         local rPt = netFolder:FindFirstChild("PumpkinTycoon_GiftOpen")
         if rPt and rPt:IsA("RemoteFunction") then
             local okPt, resPt = pcall(function()
-                return rPt:InvokeServer(giftUid, count)
+                return rPt:InvokeServer(giftName, count)
             end)
             debugRes.resPt = tostring(resPt)
             if okPt and (resPt == true or type(resPt) == "table") then
                 opened = true
+            end
+            if not opened then
+                local okPt2, resPt2 = pcall(function()
+                    return rPt:InvokeServer(giftUid, count)
+                end)
+                if okPt2 and (resPt2 == true or type(resPt2) == "table") then
+                    opened = true
+                end
             end
         end
     end
@@ -4931,8 +5037,112 @@ local WildPetsState = {
     RecentCatches = {},          -- [slotNum] = expireTimestamp (chống kẹt slot vừa bắt do client cache chưa kịp xóa)
     LastSightingCheckAt = 0,
     SavedFarmCF = nil,          -- Lưu vị trí bãi farm trước khi tele đi bắt pet
+    HighestZonePos = nil,       -- Tọa độ bãi farm cao nhất để bật Native Auto Farm
+    NativeAutoFarmActive = false,
     IsCatchingSession = false,  -- Cờ trạng thái đang trong phiên tele bắt pet
 }
+
+local function EnableNativeAutoFarm(zonePos)
+    local netFolder = RS:FindFirstChild("Network")
+    pcall(function()
+        if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Enable) == "function" then
+            Modules.AutoFarmCmds.Enable()
+        elseif Modules.Network and Modules.Network.Invoke then
+            Modules.Network.Invoke("AutoFarm_Enable", true)
+        elseif netFolder and netFolder:FindFirstChild("AutoFarm_Enable") then
+            netFolder.AutoFarm_Enable:InvokeServer(true)
+        end
+    end)
+    if zonePos then
+        pcall(function()
+            if Modules.Network and Modules.Network.Fire then
+                Modules.Network.Fire("AutoFarm_LogPosition", zonePos)
+            elseif netFolder and netFolder:FindFirstChild("AutoFarm_LogPosition") then
+                netFolder.AutoFarm_LogPosition:FireServer(zonePos)
+            end
+        end)
+    end
+    WildPetsState.NativeAutoFarmActive = true
+end
+
+local function DisableNativeAutoFarm()
+    local netFolder = RS:FindFirstChild("Network")
+    pcall(function()
+        if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Disable) == "function" then
+            Modules.AutoFarmCmds.Disable()
+        elseif Modules.Network and Modules.Network.Invoke then
+            Modules.Network.Invoke("AutoFarm_Disable")
+        elseif netFolder and netFolder:FindFirstChild("AutoFarm_Disable") then
+            netFolder.AutoFarm_Disable:InvokeServer()
+        end
+    end)
+    pcall(function()
+        if netFolder and netFolder:FindFirstChild("AutoFarm_ForceDisable") then
+            netFolder.AutoFarm_ForceDisable:FireServer()
+        end
+    end)
+    WildPetsState.NativeAutoFarmActive = false
+end
+
+local function EnsureNativeAutoHunt(plot)
+    if not plot then return end
+    pcall(function()
+        plot:Invoke(NET.SetHunt, true)
+    end)
+    pcall(function()
+        plot:Invoke(NET.SetHunt, { On = true, Min = 0, Variant = true, UltraOnHuge = true })
+    end)
+end
+
+local function GetHighestUnlockedFarmPosition(plot)
+    local _, hrp = GetCharacter()
+    if activeFarmTarget and activeFarmTarget.pos then
+        return activeFarmTarget.pos, (activeFarmTarget.cf or CFrame.new(activeFarmTarget.pos + Vector3.new(0, 3, 0)))
+    end
+
+    local pedInfo = AnalyzePedestals(plot)
+    local targets = CollectMyBreakables(plot, pedInfo)
+    if #targets > 0 then
+        local highestZoneTarget = nil
+        local maxZone = -1
+        for _, t in ipairs(targets) do
+            local z = tonumber(t.zone) or 0
+            if z > maxZone then
+                maxZone = z
+                highestZoneTarget = t
+            end
+        end
+        if highestZoneTarget and highestZoneTarget.pos then
+            return highestZoneTarget.pos, CFrame.new(highestZoneTarget.pos + Vector3.new(0, 3, 0))
+        end
+        if targets[1] and targets[1].pos then
+            return targets[1].pos, CFrame.new(targets[1].pos + Vector3.new(0, 3, 0))
+        end
+    end
+
+    if pedInfo and pedInfo.slots and #pedInfo.slots > 0 then
+        local highestSlot = nil
+        local maxRung = -1
+        for _, s in ipairs(pedInfo.slots) do
+            if s.pos and (s.rung or 0) > maxRung then
+                maxRung = s.rung or 0
+                highestSlot = s
+            end
+        end
+        if highestSlot and highestSlot.pos then
+            return highestSlot.pos, CFrame.new(highestSlot.pos + Vector3.new(0, 3, 0))
+        end
+    end
+
+    if hrp then
+        return hrp.Position, hrp.CFrame
+    end
+    local ib = GetIslandBox(plot)
+    if ib and ib.cf then
+        return ib.cf.Position, ib.cf + Vector3.new(0, 4, 0)
+    end
+    return Vector3.new(0, 50, 0), CFrame.new(0, 50, 0)
+end
 
 local function GetAvailablePetNets(plot)
     local petNets = 0
@@ -4949,12 +5159,12 @@ local function GetAvailablePetNets(plot)
                     if type(catTable) == "table" then
                         for _, item in pairs(catTable) do
                             if type(item) == "table" then
-                                local id = tostring(item.id or item._id or item.Name or "")
+                                local id = tostring(item.id or item._id or "")
                                 local amt = tonumber(item._am or item.amount or item.Count) or 1
-                                if id == "Pet Net" then
-                                    petNets = petNets + amt
-                                elseif id == "Ultra Pet Net" then
+                                if id == "Ultra Pet Net" then
                                     ultraNets = ultraNets + amt
+                                elseif id == "Pet Net" then
+                                    petNets = petNets + amt
                                 end
                             end
                         end
@@ -4993,25 +5203,42 @@ local function StepWildPets(plot)
     local petNets, ultraNets = GetAvailablePetNets(plot)
     local totalNets = petNets + ultraNets
 
-    -- Nếu hết toàn bộ lưới -> Thoát chuỗi Catch Pet, tele về bãi farm 1 lần duy nhất
-    if totalNets <= 0 then
+    local function EndCatchingSession(reason)
         if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
             WildPetsState.IsCatchingSession = false
-            if hrp and WildPetsState.SavedFarmCF then
-                Log("INFO", "🎯 [WildPets] Hết lưới trong túi. Tele về lại bãi farm tiếp tục đào pumpkin & chờ Merchant restock...")
-                hrp.CFrame = WildPetsState.SavedFarmCF
-                WildPetsState.SavedFarmCF = nil
-                task.wait(0.15)
+            local returnCF = WildPetsState.SavedFarmCF
+            if not returnCF then
+                local _, calcCF = GetHighestUnlockedFarmPosition(plot)
+                returnCF = calcCF
             end
+
+            if hrp and returnCF then
+                Log("INFO", "🎯 [WildPets] %s. Tele về lại bãi farm...", reason)
+                hrp.CFrame = returnCF
+                task.wait(0.2)
+            end
+
+            -- THEO CHỈ ĐẠO CỦA DJ: Catch pet xong thì tele về bãi và TẮT AUTO FARM đi!
+            -- Vì nếu để bật, khi mở bãi mới (ví dụ từ bãi 5 sang bãi 6) pet sẽ kẹt ở bãi cũ.
+            DisableNativeAutoFarm()
+            Log("INFO", "🎯 [WildPets] Đã TẮT Auto Farm của game để đàn pet tự do chuyển bãi khi mở khu mới!")
+
+            WildPetsState.SavedFarmCF = nil
+            WildPetsState.HighestZonePos = nil
             ReleaseMoveLock()
             if Runtime.State then
                 Runtime.State.ActiveTask = "FARMING"
             end
         end
+    end
+
+    -- Nếu hết toàn bộ lưới -> Thoát chuỗi Catch Pet, tele về bãi farm và tắt Auto Farm
+    if totalNets <= 0 then
+        EndCatchingSession("Hết lưới trong túi. Chờ Merchant restock")
         return
     end
 
-    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 1.5) then
+    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 1.2) then
         return
     end
 
@@ -5030,7 +5257,8 @@ local function StepWildPets(plot)
                 if sPhys then sightPos = sPhys:GetPivot().Position end
             end
             if hrp and not WildPetsState.SavedFarmCF then
-                WildPetsState.SavedFarmCF = hrp.CFrame
+                local _, farmCF = GetHighestUnlockedFarmPosition(plot)
+                WildPetsState.SavedFarmCF = farmCF
             end
             if hrp and sightPos then
                 hrp.CFrame = CFrame.new(sightPos + Vector3.new(0, 3, 0))
@@ -5047,10 +5275,6 @@ local function StepWildPets(plot)
                 Runtime.Stats.WildCaught = WildPetsState.CaughtCount
                 Log("INFO", "🌟 [WildPets] Bắt thành công Rare Sighting bằng %s!", sNet)
             end
-            if hrp and WildPetsState.SavedFarmCF then
-                hrp.CFrame = WildPetsState.SavedFarmCF
-                WildPetsState.SavedFarmCF = nil
-            end
             task.wait(0.3)
             Runtime.State.CatchingSighting = false
             return
@@ -5060,17 +5284,7 @@ local function StepWildPets(plot)
     -- B. Quét tìm Wild Pet trên đảo (slots 1..50)
     local wildData = plot:Save(VAR.Wild) or (PT_Wild and PT_Wild.All and PT_Wild.All())
     if type(wildData) ~= "table" then
-        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
-            WildPetsState.IsCatchingSession = false
-            if hrp and WildPetsState.SavedFarmCF then
-                hrp.CFrame = WildPetsState.SavedFarmCF
-                WildPetsState.SavedFarmCF = nil
-            end
-            ReleaseMoveLock()
-            if Runtime.State then
-                Runtime.State.ActiveTask = "FARMING"
-            end
-        end
+        EndCatchingSession("Không có dữ liệu wild pet trên đảo")
         return
     end
 
@@ -5090,7 +5304,6 @@ local function StepWildPets(plot)
     for slotKey, info in pairs(wildData) do
         local slotNum = tonumber(slotKey)
         if slotNum and type(info) == "table" then
-            -- Bỏ qua slot này nếu vừa mới bắt hoặc vừa ném trong 20s qua (tránh kẹt lặp lại slot cũ do cache client chưa xóa)
             if not (WildPetsState.RecentCatches[slotNum] and now < WildPetsState.RecentCatches[slotNum]) then
                 local petId = tostring(info.P or info.PetId or "")
                 local isHuge = string.find(petId, "Huge") ~= nil or string.find(petId, "Titanic") ~= nil or string.find(petId, "Gargantuan") ~= nil
@@ -5112,6 +5325,13 @@ local function StepWildPets(plot)
                         petPos = phys:IsA("Model") and (phys.PrimaryPart and phys.PrimaryPart.Position or phys:GetPivot().Position)
                             or (phys:IsA("BasePart") and phys.Position)
                     end
+                    -- Nếu không tìm thấy physical model thì dùng spawn position của slot hoặc zone
+                    if not petPos and PT and PT.WildTypes and PT.WildTypes.SpawnPos then
+                        local okSp, sp = pcall(PT.WildTypes.SpawnPos, slotNum)
+                        if okSp and typeof(sp) == "Vector3" then
+                            petPos = sp
+                        end
+                    end
 
                     -- Quy tắc chấm điểm theo chuẩn dj: Shiny (5000) > Rainbow (3000) > Golden (1000) > Tier * 100
                     local variantScore = (isShiny and 5000 or 0) + (isRainbow and 3000 or 0) + (isGolden and 1000 or 0) + (tier * 100)
@@ -5127,6 +5347,7 @@ local function StepWildPets(plot)
                         score = variantScore,
                         phys = phys,
                         pos = petPos,
+                        zone = info.Z,
                     }
 
                     if isHuge then
@@ -5165,6 +5386,7 @@ local function StepWildPets(plot)
             Log("WARNING", "⚠️ [WildPets] Phát hiện Huge (%s) nhưng hết Ultra Pet Net! Thử ném bằng Pet Net thường...", targetPet.petId)
         else
             Log("WARNING", "⚠️ [WildPets] Phát hiện Huge (%s) nhưng hết sạch lưới trong túi! Đang chờ mua...", targetPet.petId)
+            EndCatchingSession("Hết lưới để bắt Huge")
             return
         end
     elseif #normalCandidates > 0 then
@@ -5174,102 +5396,112 @@ local function StepWildPets(plot)
             netIdx = 1
         else
             -- Hết Pet Net thường -> Giữ lại Ultra Pet Net CHỈ để săn Huge! Không lãng phí Ultra Net cho pet thường.
+            EndCatchingSession("Hết Pet Net thường (giữ lại Ultra Net cho Huge)")
             return
         end
     end
 
-    if targetPet then
-        -- KÍCH HOẠT CHẾ ĐỘ CATCH PET ĐỘC QUYỀN
+    if not targetPet then
+        EndCatchingSession("Đã bắt hết pet phù hợp trên đảo")
+        return
+    end
+
+    -- =========================================================================
+    -- THEO ĐÚNG CHỈ ĐẠO CỦA DJ:
+    -- Bật auto hunt của game để bắt.
+    -- Tele đến zone farm sau đó bật auto farm (cơ chế của game).
+    -- Sau đó tele đến chỗ spawn hoặc chỗ có pet cho cơ chế game tự catch pet.
+    -- =========================================================================
+    if not WildPetsState.IsCatchingSession then
         Runtime.State.ActiveTask = "CATCHING_PETS"
-        AcquireMoveLock(5)
-        WildPetsState.LastThrowAt = now
+        AcquireMoveLock(30)
+
+        -- 1. Tìm vị trí bãi farm cao nhất đã mở (zone farm hiện tại)
+        local farmPos, farmCF = GetHighestUnlockedFarmPosition(plot)
+        WildPetsState.SavedFarmCF = farmCF
+        WildPetsState.HighestZonePos = farmPos
+
+        -- 2. Teleport nhân vật đến zone farm cao nhất
+        if hrp and farmCF then
+            Log("INFO", "🎯 [WildPets] Teleport đến bãi farm cao nhất để kích hoạt Auto Farm của game...")
+            hrp.CFrame = farmCF
+            task.wait(0.25)
+        end
+
+        -- 3. Bật Auto Farm (cơ chế game) để đàn pet bị khóa ở bãi farm này
+        EnableNativeAutoFarm(farmPos)
+        Log("INFO", "🎯 [WildPets] Đã bật Auto Farm của game. Đàn pet sẽ giữ farm tại bãi hiện tại!")
+
+        -- 4. Bật Auto Hunt của game
+        EnsureNativeAutoHunt(plot)
+        Log("INFO", "🎯 [WildPets] Đã bật Auto Hunt của game để cơ chế game tự động bắt!")
+
         WildPetsState.IsCatchingSession = true
+    end
 
-        -- Lưu vị trí bãi farm 1 LẦN DUY NHẤT trước khi bắt đầu chuỗi bắt pet
-        if hrp and not WildPetsState.SavedFarmCF then
-            WildPetsState.SavedFarmCF = hrp.CFrame
-        end
+    -- Refresh move lock
+    AcquireMoveLock(10)
+    Runtime.State.ActiveTask = "CATCHING_PETS"
+    WildPetsState.LastThrowAt = now
 
-        -- Teleport trực tiếp đến vị trí pet
-        if hrp and targetPet.pos then
-            hrp.CFrame = CFrame.new(targetPet.pos + Vector3.new(0, 3, 0))
-            task.wait(0.12) -- Đồng bộ tọa độ với server để vượt qua kiểm tra khoảng cách (REACH)
-        end
+    -- Teleport nhân vật đến vị trí của pet (hoặc spawn position)
+    if hrp and targetPet.pos then
+        hrp.CFrame = CFrame.new(targetPet.pos + Vector3.new(0, 3, 0))
+        task.wait(0.12)
+    end
 
-        -- 1. Kích hoạt module ném của client
-        if PT_Nets and PT_Nets.Throw then
-            pcall(function()
-                if targetPet.phys then
-                    PT_Nets.Throw(targetPet.phys, netType)
-                else
-                    PT_Nets.Throw(targetPet.slot, netType)
-                end
-            end)
-        end
+    -- Kích hoạt Auto Hunt của game và phụ trợ ném lưới
+    EnsureNativeAutoHunt(plot)
 
-        -- 2. Gọi Server Network Remote RU_Ensnare
-        local okThrow, resThrow = pcall(function()
-            return plot:Invoke(NET.CatchWild, targetPet.slot, netType)
+    if PT_Nets and PT_Nets.Throw then
+        pcall(function()
+            if targetPet.phys then
+                PT_Nets.Throw(targetPet.phys, netType)
+            else
+                PT_Nets.Throw(targetPet.slot, netType)
+            end
         end)
+    end
 
-        -- 3. Fallback truyền dạng số (index 1 / 2) nếu truyền tên chuỗi chưa được server nhận
-        if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
-            local okIdx, resIdx = pcall(function()
-                return plot:Invoke(NET.CatchWild, targetPet.slot, netIdx)
-            end)
-            if okIdx and (resIdx == true or (type(resIdx) == "table" and resIdx.Success ~= false)) then
+    local okThrow, resThrow = pcall(function()
+        return plot:Invoke(NET.CatchWild, targetPet.slot, netType)
+    end)
+
+    if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
+        local okIdx, resIdx = pcall(function()
+            return plot:Invoke(NET.CatchWild, targetPet.slot, netIdx)
+        end)
+        if okIdx and (resIdx == true or (type(resIdx) == "table" and resIdx.Success ~= false)) then
+            okThrow = true
+            resThrow = resIdx
+        end
+    end
+
+    if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
+        if Modules.Network and Modules.Network.Invoke then
+            local okRoam, resRoam = pcall(Modules.Network.Invoke, "RoamingPets_CatchPet", targetPet.slot, netType)
+            if okRoam and (resRoam == true or (type(resRoam) == "table" and resRoam.Success ~= false)) then
                 okThrow = true
-                resThrow = resIdx
-            end
-        end
-
-        -- 4. Fallback qua RoamingPets_CatchPet nếu plot:Invoke chưa nhận
-        if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
-            if Modules.Network and Modules.Network.Invoke then
-                local okRoam, resRoam = pcall(Modules.Network.Invoke, "RoamingPets_CatchPet", targetPet.slot, netType)
-                if okRoam and (resRoam == true or (type(resRoam) == "table" and resRoam.Success ~= false)) then
-                    okThrow = true
-                    resThrow = resRoam
-                end
-            end
-        end
-
-        -- Kiểm tra phản hồi thực tế từ server
-        local isSuccess = okThrow and (resThrow == true or (type(resThrow) == "table" and (resThrow.Success == true or resThrow.Caught == true)))
-        if isSuccess then
-            WildPetsState.RecentCatches[targetPet.slot] = now + 25 -- Blacklist slot này 25s để vòng lặp sau tự động chuyển sang pet tiếp theo
-            WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
-            Runtime.Stats.WildCaught = WildPetsState.CaughtCount
-            Log("INFO", "🎯 [WildPets] %s BẮT THÀNH CÔNG pet slot #%d (%s, Shiny=%s, RB=%s, Gold=%s) bằng %s! (Tổng bắt: %d)",
-                targetPet.isHuge and "🌟 [HUGE]" or "🐾",
-                targetPet.slot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
-                netType, WildPetsState.CaughtCount)
-        else
-            WildPetsState.RecentCatches[targetPet.slot] = now + 10 -- Thất bại (slot ma hoặc trống): giữ cooldown 10s để vòng sau bắt con khác ngay
-            Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, net: %s) -> Server: %s",
-                targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
-        end
-
-        -- THEO YÊU CẦU DJ: Đang trong chuỗi Catch Pet thì TIẾP TỤC Ở LẠI BẮT PET, TUYỆT ĐỐI KHÔNG TELE VỀ BÃI FARM!
-        -- Giữ nguyên nhân vật tại vị trí hiện tại, vòng lặp sau (sau 1.5s) sẽ tele trực tiếp sang con tiếp theo!
-    else
-        -- Không còn pet nào phù hợp trên đảo -> Kết thúc chuỗi Catch Pet, tele về bãi farm 1 LẦN DUY NHẤT!
-        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
-            WildPetsState.IsCatchingSession = false
-            if hrp and WildPetsState.SavedFarmCF then
-                Log("INFO", "🎯 [WildPets] Đã bắt hết pet phù hợp trên đảo. Tele về bãi farm tiếp tục đào pumpkin...")
-                hrp.CFrame = WildPetsState.SavedFarmCF
-                WildPetsState.SavedFarmCF = nil
-                task.wait(0.15)
-            end
-            ReleaseMoveLock()
-            if Runtime.State then
-                Runtime.State.ActiveTask = "FARMING"
+                resThrow = resRoam
             end
         end
     end
-end
 
+    local isSuccess = okThrow and (resThrow == true or (type(resThrow) == "table" and (resThrow.Success == true or resThrow.Caught == true)))
+    if isSuccess then
+        WildPetsState.RecentCatches[targetPet.slot] = now + 25
+        WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
+        Runtime.Stats.WildCaught = WildPetsState.CaughtCount
+        Log("INFO", "🎯 [WildPets] %s BẮT THÀNH CÔNG pet slot #%d (%s, Shiny=%s, RB=%s, Gold=%s) bằng %s! (Tổng bắt: %d)",
+            targetPet.isHuge and "🌟 [HUGE]" or "🐾",
+            targetPet.slot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
+            netType, WildPetsState.CaughtCount)
+    else
+        WildPetsState.RecentCatches[targetPet.slot] = now + 10
+        Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, net: %s) -> Server: %s",
+            targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
+    end
+end
 -- ============================================================================
 -- 11E. PET NET STORE MERCHANT ENGINE (TỰ ĐỘNG MUA LƯỚI TẠI PET NET STORE)
 -- ============================================================================
