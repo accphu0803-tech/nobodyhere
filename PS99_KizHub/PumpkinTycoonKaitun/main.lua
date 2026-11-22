@@ -180,14 +180,18 @@ local DEFAULT_CONFIG = {
     AutoRebirth = false,               -- Auto Rebirth at Zone 8 Rebirth Shrine (EW_Renew)
     AutoUseBoostsTier3 = true,         -- Auto consume Tier III / II / I Tycoon Boosts (Coins, Damage, IslandLuck)
 
-    -- Webhook & AutoMail (KizHub)
+    -- Webhook & AutoMail (KizHub Integration)
     AutoMailHuge = true,
     MailRecipient = "Kizmoii_VNG",
     MailRetryInterval = 1800,
     MailCooldownSec = 10,
-    WebhookUrl = "",
-    NotifyHuge = true,
-    NotifyTitanic = true,
+    WebhookUrl = "",                   -- Dán link Discord Webhook vào đây (hoặc set getgenv().WebhookUrl)
+    NotifyHuge = true,                 -- Báo Discord khi nổ Huge Pet
+    NotifyTitanic = true,              -- Báo Discord khi nổ Titanic Pet
+    NotifyAutoMail = true,             -- Báo Discord khi gửi thư Huge/Titanic thành công
+    NotifyPeriodicStats = false,       -- Báo cáo tiến độ acc định kỳ lên Discord (mặc định tắt, bật nếu muốn)
+    PeriodicStatsInterval = 1800,      -- Thời gian gửi báo cáo định kỳ (giây) - mặc định 30 phút (1800s)
+    WebhookMention = "",               -- Tag khi nổ Huge/Titanic: "@everyone", "@here" hoặc để trống ""
 
     -- Cấu hình hiệu năng & FPS (Non-Opti 60FPS vs Opti 5FPS)
     CPUSaver = false,
@@ -220,6 +224,12 @@ if genv.WebhookUrl and type(genv.WebhookUrl) == "string" then
     Config.WebhookUrl = genv.WebhookUrl
 elseif genv.EventsUrl and type(genv.EventsUrl) == "string" then
     Config.WebhookUrl = genv.EventsUrl
+end
+if genv.WebhookMention and type(genv.WebhookMention) == "string" then
+    Config.WebhookMention = genv.WebhookMention
+end
+if genv.NotifyPeriodicStats ~= nil then
+    Config.NotifyPeriodicStats = (genv.NotifyPeriodicStats == true)
 end
 genv.PumpkinTycoonConfig = Config
 genv.KaitunConfig = Config
@@ -4950,18 +4960,30 @@ local function SendDiscordWebhook(title, description, color, customUrl, options)
     local opts = options or {}
     local username = opts.username or "KizHub Notifier"
     local avatarUrl = opts.avatar_url or "https://i.imgur.com/8Y1jE6u.png"
-    local footerText = opts.footer or "KizHub • Pet Simulator 99"
+    local footerText = opts.footer or "KizHub • Pumpkin Tycoon Part 2"
+
+    local embed = {
+        title = title,
+        description = description,
+        color = color or 0xFFA500,
+        footer = { text = footerText },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+    if type(opts.fields) == "table" and #opts.fields > 0 then
+        embed.fields = opts.fields
+    end
+    if opts.thumbnail then
+        embed.thumbnail = { url = opts.thumbnail }
+    end
+    if opts.author then
+        embed.author = opts.author
+    end
 
     local payload = {
         username = username,
         avatar_url = avatarUrl,
-        embeds = { {
-            title = title,
-            description = description,
-            color = color or 0xFFA500,
-            footer = { text = footerText },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-        } }
+        content = opts.content or nil,
+        embeds = { embed }
     }
 
     task.spawn(function()
@@ -5039,21 +5061,40 @@ function CheckNewHugeWatcher()
                 local pName = (p.sh and "Shiny " or "") .. (p.pt == 2 and "Rainbow " or p.pt == 1 and "Golden " or "") .. p.id
                 local playerName = LocalPlayer and LocalPlayer.Name or "Unknown"
 
+                local fields = {
+                    { name = "👤 Tài khoản", value = "`" .. playerName .. "`", inline = true },
+                    { name = "🌟 Pet nhận được", value = "**" .. pName .. "**", inline = true },
+                    { name = "🆔 UID", value = "`" .. tostring(uid) .. "`", inline = false },
+                    { name = "🪙 Coins", value = ShortenNumber(Runtime and Runtime.Stats and Runtime.Stats.Coins or 0), inline = true },
+                    { name = "🥚 Tổng Mở Trứng", value = ShortenNumber(Runtime and Runtime.Stats and Runtime.Stats.EggsHatched or 0), inline = true },
+                    { name = "🕸️ Thú Hoang Đã Bắt", value = ShortenNumber(Runtime and Runtime.Stats and Runtime.Stats.WildCaught or 0), inline = true },
+                }
+
                 if isTitanic and Config.NotifyTitanic then
                     Log("WARN", "🎉 NỔ TITANIC PET SIÊU HIẾM: %s (UID: %s)", pName, tostring(uid))
                     SendDiscordWebhook(
                         "👑👑 [NỔ SIÊU PHẨM TITANIC THÀNH CÔNG] 👑👑",
-                        string.format("Người chơi: **%s**\n🌟 Siêu Phẩm Titanic: **%s**\nUID: `%s`\nThời gian: <t:%d:R>", playerName, pName, tostring(uid), os.time()),
+                        string.format("Chúc mừng **%s** vừa nổ được Siêu Phẩm **%s**!", playerName, pName),
                         0x9B59B6,
-                        targetUrl
+                        targetUrl,
+                        {
+                            fields = fields,
+                            content = (Config.WebhookMention and Config.WebhookMention ~= "") and Config.WebhookMention or nil,
+                            thumbnail = "https://i.imgur.com/8Y1jE6u.png"
+                        }
                     )
                 elseif isHuge and Config.NotifyHuge then
                     Log("WARN", "🎉 NỔ HUGE PET: %s (UID: %s)", pName, tostring(uid))
                     SendDiscordWebhook(
                         "💥 [NỔ HUGE PET THÀNH CÔNG] 💥",
-                        string.format("Người chơi: **%s**\nPet nhận được: **%s**\nUID: `%s`\nThời gian: <t:%d:R>", playerName, pName, tostring(uid), os.time()),
+                        string.format("Chúc mừng **%s** vừa nổ được Huge Pet **%s**!", playerName, pName),
                         0xFFD700,
-                        targetUrl
+                        targetUrl,
+                        {
+                            fields = fields,
+                            content = (Config.WebhookMention and Config.WebhookMention ~= "") and Config.WebhookMention or nil,
+                            thumbnail = "https://i.imgur.com/8Y1jE6u.png"
+                        }
                     )
                 end
             end
@@ -5170,19 +5211,27 @@ local function StepAutoMail()
         MailState.Status = string.format("Đã gửi %s", targetItem.Name)
         Log("INFO", "[AutoMail] 📦 Đã gửi thành công %s tới %s (Cước: %d Gems)", targetItem.Name, recipient, actualCost)
 
-        local targetUrl = Config.WebhookUrl or (type(getgenv) == "function" and (getgenv().WebhookUrl or getgenv().EventsUrl)) or ""
-        SendDiscordWebhook(
-            "📦 [AUTO-MAIL HUGE THÀNH CÔNG] 📦",
-            string.format("Người gửi: **%s**\nNgười nhận: **%s**\nVật phẩm: **%s**\nSố lượng: **%d**\nPhí cước: **%d Gems**",
-                LocalPlayer and LocalPlayer.Name or "Unknown",
-                recipient,
-                targetItem.Name,
-                targetItem.Amount or 1,
-                actualCost
-            ),
-            0x00E676,
-            targetUrl
-        )
+        if Config.NotifyAutoMail ~= false then
+            local targetUrl = Config.WebhookUrl or (type(getgenv) == "function" and (getgenv().WebhookUrl or getgenv().EventsUrl)) or ""
+            local playerName = LocalPlayer and LocalPlayer.Name or "Unknown"
+            local mailFields = {
+                { name = "👤 Người gửi", value = "`" .. playerName .. "`", inline = true },
+                { name = "📬 Người nhận", value = "**" .. tostring(recipient) .. "**", inline = true },
+                { name = "🎁 Vật phẩm gửi", value = "**" .. tostring(targetItem.Name) .. "**", inline = false },
+                { name = "💎 Cước phí", value = tostring(actualCost) .. " Gems", inline = true },
+                { name = "🪙 Coins tài khoản", value = ShortenNumber(Runtime and Runtime.Stats and Runtime.Stats.Coins or 0), inline = true },
+            }
+            SendDiscordWebhook(
+                "📦 [AUTO-MAIL HUGE THÀNH CÔNG] 📦",
+                string.format("Tài khoản **%s** đã tự động chuyển **%s** qua hòm thư an toàn tới **%s**.", playerName, targetItem.Name, recipient),
+                0x00E676,
+                targetUrl,
+                {
+                    fields = mailFields,
+                    thumbnail = "https://i.imgur.com/8Y1jE6u.png"
+                }
+            )
+        end
         task.wait(Config.MailCooldownSec or 10)
     else
         local errStr = string.lower(tostring(resSend))
@@ -5736,6 +5785,42 @@ local function StartLoops()
         while IsRunning() do
             pcall(UpdateMiniGui)
             task.wait(1.0)
+        end
+    end)
+
+    -- Loop K: Periodic Stats Webhook (Báo cáo tổng hợp tiến độ acc định kỳ lên Discord)
+    task.spawn(function()
+        while IsRunning() do
+            local interval = tonumber(Config.PeriodicStatsInterval) or 1800
+            task.wait(interval)
+            if Config.NotifyPeriodicStats and Config.WebhookUrl and Config.WebhookUrl:find("^https://") then
+                pcall(function()
+                    local playerName = LocalPlayer and LocalPlayer.Name or "Unknown"
+                    local coins = (Runtime and Runtime.Stats and Runtime.Stats.Coins) or 0
+                    local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens") or 0
+                    local hatched = (Runtime and Runtime.Stats and Runtime.Stats.EggsHatched) or 0
+                    local wild = (Runtime and Runtime.Stats and Runtime.Stats.WildCaught) or 0
+                    local gifts = (Runtime and Runtime.Stats and Runtime.Stats.GiftsOpened) or 0
+                    local nextBtn = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonName) or "N/A"
+                    local fields = {
+                        { name = "👤 Tài khoản", value = "`" .. playerName .. "`", inline = true },
+                        { name = "🪙 Coins", value = ShortenNumber(coins), inline = true },
+                        { name = "🎟️ Tokens", value = ShortenNumber(tokens), inline = true },
+                        { name = "🥚 Tổng Trứng Đã Mở", value = ShortenNumber(hatched), inline = true },
+                        { name = "🐾 Thú Hoang Đã Bắt", value = ShortenNumber(wild), inline = true },
+                        { name = "🎁 Flannel Gifts Mở", value = ShortenNumber(gifts), inline = true },
+                        { name = "🔘 Tiến Độ Nút", value = tostring(nextBtn), inline = false },
+                        { name = "📦 AutoMail", value = tostring(MailState and MailState.Status or "Sẵn sàng"), inline = true },
+                    }
+                    SendDiscordWebhook(
+                        "📊 [BÁO CÁO TIẾN ĐỘ TYCOON]",
+                        string.format("Tài khoản: **%s** đang hoạt động ổn định.", playerName),
+                        0x3498DB,
+                        nil,
+                        { fields = fields }
+                    )
+                end)
+            end
         end
     end)
 end
