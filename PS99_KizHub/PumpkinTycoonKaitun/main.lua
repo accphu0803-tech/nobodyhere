@@ -3107,16 +3107,21 @@ local function BuildGiftPositions(amount)
     local center = hrp and hrp.Position or Vector3.new(0, 10, 0)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = char and { char } or {}
+    local filterList = { char }
+    local things = Workspace:FindFirstChild("__THINGS")
+    if things and things:FindFirstChild("Breakables") then
+        table.insert(filterList, things.Breakables)
+    end
+    rayParams.FilterDescendantsInstances = filterList
 
     local positions = {}
-    local radius = 10
+    local radius = 8
     for i = 1, amount do
         local angle = (math.pi * 2 * i) / amount
         local rx = center.X + math.cos(angle) * radius
         local rz = center.Z + math.sin(angle) * radius
         local hit = Workspace:Raycast(Vector3.new(rx, center.Y + 15, rz), Vector3.new(0, -80, 0), rayParams)
-        local gy = hit and hit.Position.Y or (center.Y - 3)
+        local gy = hit and hit.Position.Y or center.Y
         table.insert(positions, Vector3.new(rx, gy, rz))
     end
     return positions
@@ -3127,7 +3132,7 @@ local function StepOpenFlannelGifts()
     if not Config.AutoOpenGifts or not Modules.Network then
         return
     end
-    if os.clock() - lastGiftAttempt < 0.25 then
+    if os.clock() - lastGiftAttempt < 0.35 then
         return
     end
 
@@ -3181,55 +3186,73 @@ local function StepOpenFlannelGifts()
     lastGiftAttempt = os.clock()
     local opened = false
 
-    -- Phương thức A: Remote sự kiện Tycoon (NET.GiftOpen = "YR_Hydrate")
-    local ok1, res1 = pcall(function()
-        local plot = GetMyPlot()
-        if plot and plot.Invoke then
-            return plot:Invoke(NET.GiftOpen, giftUid, count, positions)
-        else
-            return Modules.Network.Invoke(NET.GiftOpen, giftUid, count, positions)
-        end
-    end)
-    if ok1 and res1 == true then
-        opened = true
-    end
-
-    -- Phương thức B: Remote Lootbox tiêu chuẩn PS99 từ mục Lootboxes ("Lootbox: Open") với giftName
-    if not opened then
-        local ok2, res2 = pcall(function()
-            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+    -- Phương thức 1: Trực tiếp gọi RemoteFunction ReplicatedStorage.Network.YR_Hydrate khớp 100% Spy
+    local yrHydrate = (RS:FindFirstChild("Network") and RS.Network:FindFirstChild("YR_Hydrate")) or (Modules.Network and Modules.Network.YR_Hydrate)
+    if yrHydrate and yrHydrate:IsA("RemoteFunction") then
+        -- 1A: Gọi chuẩn theo game client: (giftUid, count, positions, false)
+        local ok1, res1 = pcall(function()
+            return yrHydrate:InvokeServer(giftUid, count, positions, false)
         end)
-        if ok2 and res2 ~= false then
+        if ok1 and (res1 == true or type(res1) == "table") then
             opened = true
         end
-    end
 
-    -- Phương thức C: Remote Lootbox tiêu chuẩn PS99 với giftUid
-    if not opened and giftUid then
-        local ok3, res3 = pcall(function()
-            return Modules.Network.Invoke("Lootbox: Open", giftUid, count)
-        end)
-        if ok3 and res3 ~= false then
-            opened = true
+        -- 1B: Nếu vị trí đất kẹt va chạm -> Gọi với cờ true (Instant Open / Skip Placement)
+        if not opened then
+            local ok1B, res1B = pcall(function()
+                return yrHydrate:InvokeServer(giftUid, count, positions, true)
+            end)
+            if ok1B and (res1B == true or type(res1B) == "table") then
+                opened = true
+            end
+        end
+
+        -- 1C: Gọi với positions rỗng và cờ true
+        if not opened then
+            local ok1C, res1C = pcall(function()
+                return yrHydrate:InvokeServer(giftUid, count, {}, true)
+            end)
+            if ok1C and (res1C == true or type(res1C) == "table") then
+                opened = true
+            end
         end
     end
 
-    -- Phương thức D: Fire remotes
+    -- Phương thức 2: Gọi qua Modules.Network.Invoke("YR_Hydrate", ...)
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        local ok2A, res2A = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, positions, false)
+        if ok2A and (res2A == true or type(res2A) == "table") then
+            opened = true
+        end
+        if not opened then
+            local ok2B, res2B = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, positions, true)
+            if ok2B and (res2B == true or type(res2B) == "table") then
+                opened = true
+            end
+        end
+    end
+
+    -- Phương thức 3: Gọi qua Plot:Invoke(NET.GiftOpen, ...)
     if not opened then
         pcall(function()
-            Modules.Network.Fire("Lootbox: Open", giftName, count)
+            local plot = GetMyPlot()
+            if plot and plot.Invoke then
+                local res = plot:Invoke(NET.GiftOpen, giftUid, count, positions, false)
+                if res == true or type(res) == "table" then
+                    opened = true
+                end
+            end
         end)
-        if giftUid then
-            pcall(function()
-                Modules.Network.Fire("Lootbox: Open", giftUid, count)
-            end)
-        end
     end
 
-    -- Phương thức E: Client LootboxCmds
-    if not opened and Modules.LootboxCmds and Modules.LootboxCmds.Open then
-        pcall(Modules.LootboxCmds.Open, giftName, count)
-        pcall(Modules.LootboxCmds.Open, giftUid, count)
+    -- Phương thức 4: Remote Lootbox tiêu chuẩn PS99 ("Lootbox: Open")
+    if not opened then
+        local ok4, res4 = pcall(function()
+            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+        end)
+        if ok4 and res4 ~= false then
+            opened = true
+        end
     end
 
     if opened then
