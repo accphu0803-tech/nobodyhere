@@ -1516,7 +1516,7 @@ local NET = (PT and PT.NET) or {
     CocoaBuyTime = "VB_Extend",
     Complete = "BT_Settle",
     Complete2 = "MH_Conclude",
-    GiftOpen = "KX_Release",
+    GiftOpen = "YR_Hydrate",
     NetShelf = "QS_Survey",
     PlaceStock = "XC_Allocate",
     Rebirth = "EW_Renew",
@@ -1899,7 +1899,7 @@ local function EnsureCharacterOnIsland(plot)
             WildPetsState.IsCatchingSession = false
             pcall(function()
                 if type(DisableNativeAutoFarm) == "function" then
-                    DisableNativeAutoFarm()
+                    DisableNativeAutoFarm(plot)
                 end
             end)
             WildPetsState.SavedFarmCF = nil
@@ -3104,12 +3104,38 @@ local function GetTrackNextInfo(trackKey)
     return { track = trackKey, nextTier = tier + 1, baseCost = baseCost, cost = liveCost }
 end
 
+local function GetCheapestAffordableUpgrade(currentTokens)
+    if not currentTokens or currentTokens <= 0 then
+        return nil
+    end
+    local tracks = Config.UpgradePriority or {
+        "MoreTokens", "FasterBreak", "DamageBonus", "LuckBonus",
+        "MoreCoins", "Walkspeed", "DiamondBonus", "PetSpeed"
+    }
+    local candidates = {}
+    for _, trackKey in ipairs(tracks) do
+        local info = GetTrackNextInfo(trackKey)
+        if info and type(info.cost) == "number" and info.cost > 0 then
+            if currentTokens >= info.cost then
+                table.insert(candidates, info)
+            end
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+    table.sort(candidates, function(a, b)
+        return a.cost < b.cost
+    end)
+    return candidates[1], candidates
+end
+
 local function StepUpgrades(plot, buttons)
     if not Config.AutoUpgrades or not plot or not Modules.UpgradesTypes then
         return
     end
-    -- Chuẩn dj: Nếu đang làm tác vụ khác (như Catch Pet), tuyệt đối không xen ngang tele đi mua nâng cấp!
-    if Runtime.State and Runtime.State.ActiveTask ~= "FARMING" then
+    -- Chuẩn dj: Nếu đang làm tác vụ độc quyền khác (như đánh Boss), không xen ngang!
+    if Runtime.State and Runtime.State.FightingTurkey then
         return
     end
 
@@ -3137,57 +3163,18 @@ local function StepUpgrades(plot, buttons)
         return
     end
 
-    local function FindAffordableUpgrade(currentTokens)
-        local catchupRatio = tonumber(Config.UpgradeCheapCatchupRatio) or 0
-        local maxCheapTier1 = tonumber(Config.UpgradeCheapTier1MaxBaseCost) or 50
-        local infos = {}
-        local pendingCheapTier1 = nil
-        local topCandidate = nil
-        for _, trackKey in ipairs(Config.UpgradePriority or {}) do
-            local info = GetTrackNextInfo(trackKey)
-            if info then
-                table.insert(infos, info)
-                if not topCandidate then
-                    topCandidate = info
-                end
-                if not pendingCheapTier1
-                    and Config.UpgradeTier1CheapFirst
-                    and info.nextTier == 1
-                    and info.baseCost <= maxCheapTier1
-                then
-                    pendingCheapTier1 = info
-                end
-            end
-        end
-
-        local selected = nil
-        if pendingCheapTier1 and currentTokens >= pendingCheapTier1.cost then
-            selected = pendingCheapTier1
-        elseif topCandidate and currentTokens >= topCandidate.cost then
-            selected = topCandidate
-        else
-            for _, info in ipairs(infos) do
-                if currentTokens >= info.cost then
-                    selected = info
-                    break
-                end
-            end
-        end
-        return selected
-    end
-
-    -- Kiểm tra trước xem có bất kỳ nâng cấp nào đủ tiền mua không (tránh tele không cần thiết)
-    local firstSelected = FindAffordableUpgrade(tokens)
-    if not firstSelected then
+    -- THEO CHỈ ĐẠO CỦA DJ: Cheaper First!
+    local cheapest = GetCheapestAffordableUpgrade(tokens)
+    if not cheapest then
         return
     end
 
-    -- Khóa trạng thái tác vụ độc quyền: Đang mua nâng cấp tại Upgrade Machine
+    -- THEO CHỈ ĐẠO CỦA DJ: Khi tele mua upd thì không được làm gì nữa, đợi mua xong rồi catch sau!
     Runtime.State.ActiveTask = "UPGRADING"
-    AcquireMoveLock(15)
+    AcquireMoveLock(35)
 
     WithMachinePad(plot, "UpgradeMachine", 80, function()
-        local maxBuys = 15
+        local maxBuys = 30
         for _ = 1, maxBuys do
             if not IsRunning() then
                 break
@@ -3195,9 +3182,9 @@ local function StepUpgrades(plot, buttons)
             tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
             Runtime.Stats.Tokens = tokens
 
-            local selected = FindAffordableUpgrade(tokens)
+            local selected = GetCheapestAffordableUpgrade(tokens)
             if not selected then
-                break
+                break -- Đã mua sạch tất cả nâng cấp có thể mua!
             end
 
             local trackKey = selected.track
@@ -3268,14 +3255,22 @@ local function StepUpgrades(plot, buttons)
 
             if bought then
                 Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-                Log("INFO", "🎯 [Upgrade Machine] Đã nâng cấp [%s] (%s) lên Tier %d (tốn %s Tokens)",
+                Log("INFO", "🎯 [Upgrade Machine] Đã mua nâng cấp rẻ nhất [%s] (%s) lên Tier %d (tốn %s Tokens)",
                     trackKey, fullUpgradeId, selected.nextTier, tostring(selected.cost))
-                task.wait(0.08)
+                task.wait(0.1)
             else
                 break
             end
         end
     end)
+
+    -- Mua xong, tele nhân vật về bãi farm cao nhất và mở khóa tác vụ
+    local _, farmCF = GetHighestUnlockedFarmPosition(plot)
+    local _, hrp = GetCharacter()
+    if hrp and farmCF then
+        hrp.CFrame = farmCF
+        task.wait(0.15)
+    end
 
     ReleaseMoveLock()
     Runtime.State.ActiveTask = "FARMING"
@@ -3482,6 +3477,21 @@ local function StepOpenFlannelGifts()
 
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
 
+    -- Phương thức 0: LootboxCmds.Open từ Library Client
+    if not opened and Modules.LootboxCmds and type(Modules.LootboxCmds.Open) == "function" then
+        local realObj = (Modules.LootboxCmds.Get and Modules.LootboxCmds.Get(giftUid)) or { class = "Lootbox", data = { id = giftName }, uid = giftUid }
+        local ok0A, res0A = pcall(Modules.LootboxCmds.Open, realObj, count)
+        if ok0A and (res0A == true or (res0A ~= false and res0A ~= nil)) then
+            opened = true
+        end
+        if not opened then
+            local ok0B, res0B = pcall(Modules.LootboxCmds.Open, giftName, count)
+            if ok0B and (res0B == true or (res0B ~= false and res0B ~= nil)) then
+                opened = true
+            end
+        end
+    end
+
     -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với tên và số lượng
     if not opened and Modules.Network and Modules.Network.Invoke then
         local ok1, res1 = pcall(function()
@@ -3516,26 +3526,55 @@ local function StepOpenFlannelGifts()
         end
     end
 
-    -- Phương thức 2: Remote GiftBag_Open nếu Flannel Gift được game coi là GiftBag
+    -- Phương thức 2: Remote GiftBag_Open (chuẩn PS99: đối số 1 là giftName)
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        local ok2A, res2A = pcall(function()
+            return Modules.Network.Invoke("GiftBag_Open", giftName, count)
+        end)
+        if ok2A and res2A ~= false and res2A ~= nil then
+            opened = true
+        end
+    end
     if not opened and netFolder then
         local rBag = netFolder:FindFirstChild("GiftBag_Open")
         if rBag and rBag:IsA("RemoteFunction") then
-            local ok2, res2 = pcall(function()
-                return rBag:InvokeServer(giftUid, count)
+            local ok2B, res2B = pcall(function()
+                return rBag:InvokeServer(giftName, count)
             end)
-            debugRes.res2 = tostring(res2)
-            if ok2 and res2 ~= false and res2 ~= nil then
+            debugRes.res2 = tostring(res2B)
+            if ok2B and res2B ~= false and res2B ~= nil then
                 opened = true
+            end
+            if not opened then
+                local ok2C, res2C = pcall(function()
+                    return rBag:InvokeServer(giftUid, count)
+                end)
+                if ok2C and res2C ~= false and res2C ~= nil then
+                    opened = true
+                end
             end
         end
     end
 
-    -- Phương thức 3: Remote Lootables_Open
+    -- Phương thức 2B: Remote Event "Open Giftbag"
+    if not opened and netFolder then
+        local rOpenBag = netFolder:FindFirstChild("Open Giftbag")
+        if rOpenBag and rOpenBag:IsA("RemoteEvent") then
+            pcall(function()
+                rOpenBag:FireServer(giftName, count)
+            end)
+            pcall(function()
+                rOpenBag:FireServer(giftUid, count)
+            end)
+        end
+    end
+
+    -- Phương thức 3: Remote Lootables_Open (chuẩn PS99: đối số 1 là giftName)
     if not opened and netFolder then
         local rLootables = netFolder:FindFirstChild("Lootables_Open")
         if rLootables and rLootables:IsA("RemoteFunction") then
             local ok3, res3 = pcall(function()
-                return rLootables:InvokeServer(giftUid, count)
+                return rLootables:InvokeServer(giftName, count)
             end)
             debugRes.res3 = tostring(res3)
             if ok3 and res3 ~= false and res3 ~= nil then
@@ -3544,18 +3583,57 @@ local function StepOpenFlannelGifts()
         end
     end
 
-    -- Phương thức 4: Remote Tycoon KX_Release (đã đối soát trong Part 2 dump)
+    -- Phương thức 4: Remote Tycoon YR_Hydrate (đối soát 100% trong dump Part 2)
     if not opened then
         pcall(function()
             local plot = GetMyPlot()
             if plot and plot.Invoke then
-                local res4 = plot:Invoke("KX_Release", giftUid, count, positions)
-                debugRes.res4 = tostring(res4)
-                if res4 == true or type(res4) == "table" then
+                local res4A = plot:Invoke(NET.GiftOpen or "YR_Hydrate", count, positions)
+                if res4A == true or type(res4A) == "table" then
                     opened = true
+                end
+                if not opened then
+                    local res4B = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions, true)
+                    debugRes.res4 = tostring(res4B)
+                    if res4B == true or type(res4B) == "table" then
+                        opened = true
+                    end
+                end
+                if not opened then
+                    local res4C = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftName, count, positions)
+                    if res4C == true or type(res4C) == "table" then
+                        opened = true
+                    end
                 end
             end
         end)
+    end
+    if not opened and netFolder then
+        local rHydrate = netFolder:FindFirstChild("YR_Hydrate")
+        if rHydrate and rHydrate:IsA("RemoteFunction") then
+            local okH1, resH1 = pcall(function()
+                return rHydrate:InvokeServer(giftUid, count, positions, true)
+            end)
+            if okH1 and resH1 ~= false and resH1 ~= nil then
+                opened = true
+            end
+            if not opened then
+                local okH2, resH2 = pcall(function()
+                    return rHydrate:InvokeServer(giftUid, count, positions, false)
+                end)
+                if okH2 and resH2 ~= false and resH2 ~= nil then
+                    opened = true
+                end
+            end
+            if not opened then
+                local okH3, resH3 = pcall(function()
+                    return rHydrate:InvokeServer(giftName, count, positions, true)
+                end)
+                if okH3 and resH3 ~= false and resH3 ~= nil then
+                    opened = true
+                end
+            end
+        end
     end
 
     -- Phương thức 5: Remote Function PumpkinTycoon_GiftOpen
@@ -4997,7 +5075,7 @@ local function GetTycoonCaughtCount(plot)
     return count
 end
 
-local function EnableNativeAutoFarm(zonePos)
+local function EnableNativeAutoFarm(plot, zonePos)
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
     pcall(function()
         if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Enable) == "function" then
@@ -5008,6 +5086,11 @@ local function EnableNativeAutoFarm(zonePos)
             netFolder.AutoFarm_Enable:InvokeServer(true)
         end
     end)
+    if plot and plot.Invoke and NET and NET.SetAutoBreak then
+        pcall(function()
+            plot:Invoke(NET.SetAutoBreak, true)
+        end)
+    end
     if zonePos then
         pcall(function()
             if Modules.Network and Modules.Network.Fire then
@@ -5020,7 +5103,7 @@ local function EnableNativeAutoFarm(zonePos)
     WildPetsState.NativeAutoFarmActive = true
 end
 
-local function DisableNativeAutoFarm()
+local function DisableNativeAutoFarm(plot)
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
     pcall(function()
         if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Disable) == "function" then
@@ -5036,6 +5119,11 @@ local function DisableNativeAutoFarm()
             netFolder.AutoFarm_ForceDisable:FireServer()
         end
     end)
+    if plot and plot.Invoke and NET and NET.SetAutoBreak then
+        pcall(function()
+            plot:Invoke(NET.SetAutoBreak, false)
+        end)
+    end
     WildPetsState.NativeAutoFarmActive = false
 end
 
@@ -5150,6 +5238,15 @@ local function StepWildPets(plot)
         return
     end
 
+    -- THEO CHỈ ĐẠO CỦA DJ: Nếu Upgrade Machine còn nâng cấp mua được (cheaper first), nhường quyền mua trước, đợi mua xong rồi catch sau!
+    local curTokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+    if curTokens > 0 and type(GetCheapestAffordableUpgrade) == "function" then
+        local affordableUp = GetCheapestAffordableUpgrade(curTokens)
+        if affordableUp then
+            return
+        end
+    end
+
     local now = os.clock()
     local char, hrp = GetCharacter()
     if not hrp then return end
@@ -5175,7 +5272,7 @@ local function StepWildPets(plot)
 
             -- THEO CHỈ ĐẠO CỦA DJ: Catch pet xong thì tele về bãi và TẮT AUTO FARM đi!
             -- Vì nếu để bật, khi mở bãi mới (ví dụ từ bãi 5 sang bãi 6) pet sẽ kẹt ở bãi cũ.
-            DisableNativeAutoFarm()
+            DisableNativeAutoFarm(plot)
             Log("INFO", "🎯 [WildPets] Đã TẮT Auto Farm của game để đàn pet tự do chuyển bãi khi mở khu mới!")
 
             WildPetsState.SavedFarmCF = nil
@@ -5371,23 +5468,16 @@ local function StepWildPets(plot)
         Runtime.State.ActiveTask = "CATCHING_PETS"
         AcquireMoveLock(30)
 
-        -- 1. Tìm vị trí bãi farm cao nhất đã mở (zone farm hiện tại)
+        -- 1. Lưu vị trí bãi farm cao nhất đã mở để kết thúc phiên catch pet tele về
         local farmPos, farmCF = GetHighestUnlockedFarmPosition(plot)
         WildPetsState.SavedFarmCF = farmCF
         WildPetsState.HighestZonePos = farmPos
 
-        -- 2. Teleport nhân vật đến zone farm cao nhất
-        if hrp and farmCF then
-            Log("INFO", "🎯 [WildPets] Teleport đến bãi farm cao nhất để kích hoạt Auto Farm của game...")
-            hrp.CFrame = farmCF
-            task.wait(0.25)
-        end
+        -- 2. Bật Auto Farm (cơ chế game) trực tiếp như bật Auto Hunt (theo lệnh dj: không gọi pet thủ công!)
+        EnableNativeAutoFarm(plot, farmPos)
+        Log("INFO", "🎯 [WildPets] Đã bật Auto Farm của game để đàn pet tự giữ farm bãi hiện tại!")
 
-        -- 3. Bật Auto Farm (cơ chế game) để đàn pet bị khóa ở bãi farm này
-        EnableNativeAutoFarm(farmPos)
-        Log("INFO", "🎯 [WildPets] Đã bật Auto Farm của game. Đàn pet sẽ giữ farm tại bãi hiện tại!")
-
-        -- 4. Bật Auto Hunt của game
+        -- 3. Bật Auto Hunt của game
         EnsureNativeAutoHunt(plot)
         Log("INFO", "🎯 [WildPets] Đã bật Auto Hunt của game để cơ chế game tự động bắt!")
 
