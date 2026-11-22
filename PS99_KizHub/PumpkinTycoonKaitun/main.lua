@@ -362,6 +362,11 @@ local Runtime = {
         CraftFailUntil = { Gold = 0, Rainbow = 0 },
         CraftEventPetSet = nil,
     },
+    State = {
+        ActiveTask = "FARMING", -- "FARMING" | "CATCHING_PETS" | "UPGRADING" | "BUYING_NETS"
+        CatchingSighting = false,
+        FightingTurkey = false,
+    },
 }
 
 local function IsRunning()
@@ -1580,6 +1585,7 @@ end
 
 local function IsMoveLocked()
     return (Runtime.Cache.MoveLockUntil or 0) > os.clock()
+        or (Runtime.State and Runtime.State.ActiveTask ~= "FARMING")
 end
 
 local function AcquireMoveLock(durationSec)
@@ -1735,10 +1741,12 @@ local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
     local padCF = FindMachinePadCFrame(plot, machineName)
     local moved = false
 
+    AcquireMoveLock(8)
+
     -- Nếu đứng xa máy (> 8 studs), tele tức thì đến bệ máy để thỏa mãn yêu cầu khoảng cách của server
     if hrp and padCF and (hrp.Position - padCF.Position).Magnitude > 8 then
         hrp.CFrame = padCF
-        task.wait(0.15) -- Chờ server đồng bộ tọa độ nhân vật đứng trên máy
+        task.wait(0.2) -- Chờ server đồng bộ tọa độ nhân vật đứng trên máy
         moved = true
     end
 
@@ -1758,9 +1766,12 @@ local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
 
     -- Đưa nhân vật quay trở lại vị trí bãi farm ban đầu ngay lập tức
     if moved and hrp and prevCF and IsRunning() then
-        task.wait(0.05)
+        task.wait(0.08)
         hrp.CFrame = prevCF
+        task.wait(0.05)
     end
+
+    ReleaseMoveLock()
 
     if not ok then
         Log("DEBUG", "Machine action error [%s]: %s", tostring(machineName), tostring(err))
@@ -1845,7 +1856,7 @@ end
 
 local function EnsureCharacterOnIsland(plot)
     if not plot or not IsInEventInstance() then return end
-    if Runtime.Stats.IsHatching or (Runtime.State and (Runtime.State.CatchingSighting or Runtime.State.FightingTurkey)) then
+    if Runtime.Stats.IsHatching or IsMoveLocked() or (Runtime.State and Runtime.State.ActiveTask ~= "FARMING") then
         return
     end
     local _, hrp = GetCharacter()
@@ -2623,8 +2634,8 @@ local function StepFarmTargeter(plot)
     Runtime.Stats.ActiveTargetDesc = chosen.isBonus and "BonusChest"
         or (chosen.isPedestal and ("Ped-Rung-" .. tostring(chosen.rung)) or ("Zone-" .. tostring(chosen.zone or 1)))
 
-    -- Never steal character position while active Hatch loop or Machine Pad action holds position lock
-    if not Runtime.Stats.IsHatching and not IsMoveLocked() then
+    -- Tuyệt đối không cướp vị trí nhân vật khi đang Hatch, đứng bệ máy hoặc đang thực hiện tác vụ độc quyền (như Catch Pet, Upgrade)
+    if not Runtime.Stats.IsHatching and not IsMoveLocked() and (Runtime.State and Runtime.State.ActiveTask == "FARMING") then
         local reach = GetTapReach()
         local moveRange = math.max(10, reach - 5)
         -- Nếu nhân vật đứng quá xa bãi farm (> 90 studs, ví dụ ở spawn hoặc bay ra ngoài), luôn đưa nhân vật về bãi farm!
@@ -3054,6 +3065,10 @@ local function StepUpgrades(plot, buttons)
     if not Config.AutoUpgrades or not plot or not Modules.UpgradesTypes or not Modules.PumpkinButtonsUtil then
         return
     end
+    -- Chuẩn dj: Nếu đang làm tác vụ khác (như Catch Pet), tuyệt đối không xen ngang tele đi mua nâng cấp!
+    if Runtime.State and Runtime.State.ActiveTask ~= "FARMING" then
+        return
+    end
     local machineButton = Modules.UpgradesTypes.BUTTON or "UpgradeMachine"
     if not Modules.PumpkinButtonsUtil.Owned(buttons, machineButton) then
         return
@@ -3110,7 +3125,10 @@ local function StepUpgrades(plot, buttons)
         return
     end
 
-    -- Theo yêu cầu chuẩn dj: Nâng cấp tại Upgrade Machine bằng Pumpkin Tokens yêu cầu tiếp cận bệ máy (Proximity)
+    -- Khóa trạng thái tác vụ độc quyền: Đang mua nâng cấp tại Upgrade Machine
+    Runtime.State.ActiveTask = "UPGRADING"
+    AcquireMoveLock(15)
+
     WithMachinePad(plot, "UpgradeMachine", 80, function()
         local maxBuys = 15
         for _ = 1, maxBuys do
@@ -3146,9 +3164,12 @@ local function StepUpgrades(plot, buttons)
 
             Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
             Log("INFO", "Upgraded [%s] to Tier %d for %s Tokens", selected.track, selected.nextTier, tostring(selected.cost))
-            task.wait(0.06)
+            task.wait(0.08)
         end
     end)
+
+    ReleaseMoveLock()
+    Runtime.State.ActiveTask = "FARMING"
 end
 
 -- ============================================================================
@@ -3432,6 +3453,8 @@ local function StepOpenFlannelGifts()
         end)
     end
 
+    local netFolder = RS:FindFirstChild("Network")
+
     -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với tên và số lượng
     if not opened and Modules.Network and Modules.Network.Invoke then
         local ok1, res1 = pcall(function()
@@ -3444,46 +3467,53 @@ local function StepOpenFlannelGifts()
     end
 
     -- Phương thức 1B: "Lootbox: Open" trực tiếp qua ReplicatedStorage.Network
-    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootbox: Open") then
-        local ok1B, res1B = pcall(function()
-            return RS.Network["Lootbox: Open"]:InvokeServer(giftName, count)
-        end)
-        debugRes.res1B = tostring(res1B)
-        if ok1B and res1B ~= false and res1B ~= nil then
-            opened = true
-        end
-    end
-
-    -- Phương thức 1C: "Lootbox: Open" với giftUid
-    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootbox: Open") then
-        local ok1C, res1C = pcall(function()
-            return RS.Network["Lootbox: Open"]:InvokeServer(giftUid, count)
-        end)
-        debugRes.res1C = tostring(res1C)
-        if ok1C and res1C ~= false and res1C ~= nil then
-            opened = true
+    if not opened and netFolder then
+        local rLoot = netFolder:FindFirstChild("Lootbox: Open")
+        if rLoot and rLoot:IsA("RemoteFunction") then
+            local ok1B, res1B = pcall(function()
+                return rLoot:InvokeServer(giftName, count)
+            end)
+            debugRes.res1B = tostring(res1B)
+            if ok1B and res1B ~= false and res1B ~= nil then
+                opened = true
+            end
+            if not opened then
+                local ok1C, res1C = pcall(function()
+                    return rLoot:InvokeServer(giftUid, count)
+                end)
+                debugRes.res1C = tostring(res1C)
+                if ok1C and res1C ~= false and res1C ~= nil then
+                    opened = true
+                end
+            end
         end
     end
 
     -- Phương thức 2: Remote GiftBag_Open nếu Flannel Gift được game coi là GiftBag
-    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("GiftBag_Open") then
-        local ok2, res2 = pcall(function()
-            return RS.Network.GiftBag_Open:InvokeServer(giftUid, count)
-        end)
-        debugRes.res2 = tostring(res2)
-        if ok2 and res2 ~= false and res2 ~= nil then
-            opened = true
+    if not opened and netFolder then
+        local rBag = netFolder:FindFirstChild("GiftBag_Open")
+        if rBag and rBag:IsA("RemoteFunction") then
+            local ok2, res2 = pcall(function()
+                return rBag:InvokeServer(giftUid, count)
+            end)
+            debugRes.res2 = tostring(res2)
+            if ok2 and res2 ~= false and res2 ~= nil then
+                opened = true
+            end
         end
     end
 
     -- Phương thức 3: Remote Lootables_Open
-    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootables_Open") then
-        local ok3, res3 = pcall(function()
-            return RS.Network.Lootables_Open:InvokeServer(giftUid, count)
-        end)
-        debugRes.res3 = tostring(res3)
-        if ok3 and res3 ~= false and res3 ~= nil then
-            opened = true
+    if not opened and netFolder then
+        local rLootables = netFolder:FindFirstChild("Lootables_Open")
+        if rLootables and rLootables:IsA("RemoteFunction") then
+            local ok3, res3 = pcall(function()
+                return rLootables:InvokeServer(giftUid, count)
+            end)
+            debugRes.res3 = tostring(res3)
+            if ok3 and res3 ~= false and res3 ~= nil then
+                opened = true
+            end
         end
     end
 
@@ -3502,13 +3532,16 @@ local function StepOpenFlannelGifts()
     end
 
     -- Phương thức 5: Remote Function PumpkinTycoon_GiftOpen
-    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("PumpkinTycoon_GiftOpen") then
-        local okPt, resPt = pcall(function()
-            return RS.Network.PumpkinTycoon_GiftOpen:InvokeServer(giftUid, count)
-        end)
-        debugRes.resPt = tostring(resPt)
-        if okPt and (resPt == true or type(resPt) == "table") then
-            opened = true
+    if not opened and netFolder then
+        local rPt = netFolder:FindFirstChild("PumpkinTycoon_GiftOpen")
+        if rPt and rPt:IsA("RemoteFunction") then
+            local okPt, resPt = pcall(function()
+                return rPt:InvokeServer(giftUid, count)
+            end)
+            debugRes.resPt = tostring(resPt)
+            if okPt and (resPt == true or type(resPt) == "table") then
+                opened = true
+            end
         end
     end
 
@@ -4745,6 +4778,10 @@ local function StepCraftPets(plot, buttons)
     if not Config.AutoMakeGold and not Config.AutoMakeRainbow then
         return
     end
+    -- Chuẩn dj: Nếu đang làm tác vụ khác (như Catch Pet hay Upgrading), không xen ngang!
+    if Runtime.State and Runtime.State.ActiveTask ~= "FARMING" then
+        return
+    end
 
     local now = os.clock()
     local checkInterval = math.max(0.2, tonumber(Config.CraftCheckIntervalSec) or 1.0)
@@ -4943,28 +4980,38 @@ end
 
 local function StepWildPets(plot)
     if not Config.AutoCatchWild or not plot then return end
+    -- Chuẩn dj: Nếu đang thực hiện nâng cấp tại Upgrade Machine hoặc đánh Boss, không xen ngang!
+    if Runtime.State and (Runtime.State.ActiveTask == "UPGRADING" or Runtime.State.FightingTurkey) then
+        return
+    end
+
     local now = os.clock()
+    local char, hrp = GetCharacter()
+    if not hrp then return end
 
     -- 1. Quét kiểm tra kho lưới hiện có
     local petNets, ultraNets = GetAvailablePetNets(plot)
     local totalNets = petNets + ultraNets
-    local char, hrp = GetCharacter()
 
-    -- Nếu hết toàn bộ lưới -> Trở về bãi farm tiếp tục farm bãi breakable và chờ Merchant restock lưới
+    -- Nếu hết toàn bộ lưới -> Thoát chuỗi Catch Pet, tele về bãi farm 1 lần duy nhất
     if totalNets <= 0 then
-        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF then
+        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
             WildPetsState.IsCatchingSession = false
             if hrp and WildPetsState.SavedFarmCF then
                 Log("INFO", "🎯 [WildPets] Hết lưới trong túi. Tele về lại bãi farm tiếp tục đào pumpkin & chờ Merchant restock...")
                 hrp.CFrame = WildPetsState.SavedFarmCF
                 WildPetsState.SavedFarmCF = nil
-                task.wait(0.2)
+                task.wait(0.15)
+            end
+            ReleaseMoveLock()
+            if Runtime.State then
+                Runtime.State.ActiveTask = "FARMING"
             end
         end
         return
     end
 
-    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 2.5) then
+    if (now - WildPetsState.LastThrowAt) < (PT and PT.WildTypes and PT.WildTypes.THROW_SECONDS or 1.5) then
         return
     end
 
@@ -4987,7 +5034,7 @@ local function StepWildPets(plot)
             end
             if hrp and sightPos then
                 hrp.CFrame = CFrame.new(sightPos + Vector3.new(0, 3, 0))
-                task.wait(0.08)
+                task.wait(0.12)
             end
 
             local sNet = (ultraNets > 0) and "Ultra Pet Net" or "Pet Net"
@@ -5012,7 +5059,20 @@ local function StepWildPets(plot)
 
     -- B. Quét tìm Wild Pet trên đảo (slots 1..50)
     local wildData = plot:Save(VAR.Wild) or (PT_Wild and PT_Wild.All and PT_Wild.All())
-    if type(wildData) ~= "table" then return end
+    if type(wildData) ~= "table" then
+        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
+            WildPetsState.IsCatchingSession = false
+            if hrp and WildPetsState.SavedFarmCF then
+                hrp.CFrame = WildPetsState.SavedFarmCF
+                WildPetsState.SavedFarmCF = nil
+            end
+            ReleaseMoveLock()
+            if Runtime.State then
+                Runtime.State.ActiveTask = "FARMING"
+            end
+        end
+        return
+    end
 
     -- Dọn dẹp cache các slot đã hết thời gian cooldown
     for sNum, expAt in pairs(WildPetsState.RecentCatches) do
@@ -5119,10 +5179,13 @@ local function StepWildPets(plot)
     end
 
     if targetPet then
+        -- KÍCH HOẠT CHẾ ĐỘ CATCH PET ĐỘC QUYỀN
+        Runtime.State.ActiveTask = "CATCHING_PETS"
+        AcquireMoveLock(5)
         WildPetsState.LastThrowAt = now
         WildPetsState.IsCatchingSession = true
 
-        -- Lưu vị trí bãi farm trước khi tele
+        -- Lưu vị trí bãi farm 1 LẦN DUY NHẤT trước khi bắt đầu chuỗi bắt pet
         if hrp and not WildPetsState.SavedFarmCF then
             WildPetsState.SavedFarmCF = hrp.CFrame
         end
@@ -5130,7 +5193,7 @@ local function StepWildPets(plot)
         -- Teleport trực tiếp đến vị trí pet
         if hrp and targetPet.pos then
             hrp.CFrame = CFrame.new(targetPet.pos + Vector3.new(0, 3, 0))
-            task.wait(0.08) -- Đồng bộ tọa độ với server để vượt qua kiểm tra khoảng cách (REACH)
+            task.wait(0.12) -- Đồng bộ tọa độ với server để vượt qua kiểm tra khoảng cách (REACH)
         end
 
         -- 1. Kích hoạt module ném của client
@@ -5187,16 +5250,22 @@ local function StepWildPets(plot)
                 targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
         end
 
-        -- Sau khi ném lưới xong, quay trở lại bãi farm ngay lập tức
-        if hrp and WildPetsState.SavedFarmCF then
-            hrp.CFrame = WildPetsState.SavedFarmCF
-            WildPetsState.SavedFarmCF = nil
-        end
+        -- THEO YÊU CẦU DJ: Đang trong chuỗi Catch Pet thì TIẾP TỤC Ở LẠI BẮT PET, TUYỆT ĐỐI KHÔNG TELE VỀ BÃI FARM!
+        -- Giữ nguyên nhân vật tại vị trí hiện tại, vòng lặp sau (sau 1.5s) sẽ tele trực tiếp sang con tiếp theo!
     else
-        -- Không có pet nào phù hợp để bắt -> Quay lại bãi farm
-        if hrp and WildPetsState.SavedFarmCF then
-            hrp.CFrame = WildPetsState.SavedFarmCF
-            WildPetsState.SavedFarmCF = nil
+        -- Không còn pet nào phù hợp trên đảo -> Kết thúc chuỗi Catch Pet, tele về bãi farm 1 LẦN DUY NHẤT!
+        if WildPetsState.IsCatchingSession or WildPetsState.SavedFarmCF or (Runtime.State and Runtime.State.ActiveTask == "CATCHING_PETS") then
+            WildPetsState.IsCatchingSession = false
+            if hrp and WildPetsState.SavedFarmCF then
+                Log("INFO", "🎯 [WildPets] Đã bắt hết pet phù hợp trên đảo. Tele về bãi farm tiếp tục đào pumpkin...")
+                hrp.CFrame = WildPetsState.SavedFarmCF
+                WildPetsState.SavedFarmCF = nil
+                task.wait(0.15)
+            end
+            ReleaseMoveLock()
+            if Runtime.State then
+                Runtime.State.ActiveTask = "FARMING"
+            end
         end
     end
 end
@@ -5207,6 +5276,10 @@ end
 local lastPetNetStoreCheck = 0
 local function StepPetNetMerchant(plot)
     if not Config.AutoBuyNetsMerchant or not plot then return end
+    -- Chuẩn dj: Nếu đang thực hiện tác vụ khác (như Catch Pet hoặc Upgrading), tuyệt đối không xen ngang!
+    if Runtime.State and Runtime.State.ActiveTask ~= "FARMING" then
+        return
+    end
     local now = os.clock()
     local interval = tonumber(Config.PetNetStoreInterval) or 3
     if (now - lastPetNetStoreCheck) < interval then return end
@@ -5241,11 +5314,12 @@ local function StepPetNetMerchant(plot)
 
             -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
             local offers = nil
+            local netF = RS:FindFirstChild("Network")
             if Modules.Network and Modules.Network.Invoke then
                 local okO, resO = pcall(Modules.Network.Invoke, "Merchant_GetOffers", "PetNetStore")
                 if okO and type(resO) == "table" then offers = resO end
-            elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_GetOffers") then
-                local okO, resO = pcall(function() return RS.Network.Merchant_GetOffers:InvokeServer("PetNetStore") end)
+            elseif netF and netF:FindFirstChild("Merchant_GetOffers") then
+                local okO, resO = pcall(function() return netF.Merchant_GetOffers:InvokeServer("PetNetStore") end)
                 if okO and type(resO) == "table" then offers = resO end
             end
 
@@ -5259,8 +5333,8 @@ local function StepPetNetMerchant(plot)
                             if Modules.Network and Modules.Network.Invoke then
                                 local okB, resB = pcall(Modules.Network.Invoke, "Merchant_RequestPurchase", "PetNetStore", slotNum)
                                 if okB and resB ~= false then bought = true end
-                            elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_RequestPurchase") then
-                                local okB, resB = pcall(function() return RS.Network.Merchant_RequestPurchase:InvokeServer("PetNetStore", slotNum) end)
+                            elseif netF and netF:FindFirstChild("Merchant_RequestPurchase") then
+                                local okB, resB = pcall(function() return netF.Merchant_RequestPurchase:InvokeServer("PetNetStore", slotNum) end)
                                 if okB and resB ~= false then bought = true end
                             end
                             if bought then
@@ -5931,7 +6005,8 @@ local function StepFreeGifts()
             end
             -- Cách 3: Remote trực tiếp trong ReplicatedStorage.Network
             if not claimed then
-                local r = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Redeem Free Gift")
+                local netF = RS:FindFirstChild("Network")
+                local r = netF and netF:FindFirstChild("Redeem Free Gift")
                 if r then
                     if r:IsA("RemoteFunction") then
                         local okR, resR = pcall(function() return r:InvokeServer(i) end)
