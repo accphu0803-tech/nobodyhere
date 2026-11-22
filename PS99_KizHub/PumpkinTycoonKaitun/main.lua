@@ -1672,6 +1672,29 @@ local function FindMachinePadCFrame(plot, machineName)
     local plotModel = plot and plot.GetModel and plot:GetModel()
     local lName = tostring(machineName):lower()
 
+    -- 1. Ưu tiên tuyệt đối Upgrade Machine theo dữ liệu capture thực tế từ dj:
+    -- Đường dẫn thực tế: Workspace.__THINGS.Plots.<PlotId>.Interactable.Machines.PumpkinTycoonUpgradeMachine.Pad
+    -- Relative Offset chuẩn: Vector3.new(41.09, -0.85, 135.32)
+    if lName:find("upgrade") then
+        if plotModel then
+            local interactable = plotModel:FindFirstChild("Interactable")
+            local machines = interactable and interactable:FindFirstChild("Machines")
+            local uMach = machines and (machines:FindFirstChild("PumpkinTycoonUpgradeMachine") or machines:FindFirstChild("UpgradeMachine"))
+            local padPart = uMach and (uMach:FindFirstChild("Pad") or uMach:FindFirstChild("PadMarker") or uMach:FindFirstChildWhichIsA("BasePart"))
+            if padPart and padPart:IsA("BasePart") then
+                return padPart.CFrame + Vector3.new(0, 1.2, 0), padPart
+            end
+        end
+
+        local plotPivot = (plotModel and plotModel:GetPivot()) or (plot and plot.GetPivot and plot:GetPivot())
+        if plotPivot then
+            local exactPos = plotPivot:PointToWorldSpace(Vector3.new(41.09, -0.85, 135.32))
+            local exactCF = CFrame.new(exactPos + Vector3.new(0, 1.2, 0))
+            local padPart = plotModel and plotModel:FindFirstChild("Pad", true)
+            return exactCF, padPart
+        end
+    end
+
     local testNames = {}
     if lName:find("upgrade") then
         table.insert(testNames, "PadMarker_UpgradeMachine")
@@ -5177,37 +5200,43 @@ local function GetHighestUnlockedFarmPosition(plot)
         end
     end
 
-    if hrp then
-        return hrp.Position, hrp.CFrame
-    end
+    local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+    local plotPivot = plotModel and plotModel:GetPivot()
     local ib = GetIslandBox(plot)
     if ib and ib.cf then
         return ib.cf.Position, ib.cf + Vector3.new(0, 4, 0)
     end
-    return Vector3.new(0, 50, 0), CFrame.new(0, 50, 0)
+    if plotPivot then
+        return plotPivot.Position, plotPivot + Vector3.new(0, 4, 0)
+    end
+    if hrp and plotPivot and (hrp.Position - plotPivot.Position).Magnitude <= 200 then
+        return hrp.Position, hrp.CFrame
+    end
+    -- Tọa độ an toàn trên đảo (cao độ Tycoon ~2000 studs), tuyệt đối KHÔNG trả về (0, 50, 0) vì đó là World Spawn!
+    return Vector3.new(7177, 2006, 5601), CFrame.new(7177, 2006, 5601)
 end
 
 local function GetAvailablePetNets(plot)
     local petNets = 0
     local ultraNets = 0
 
-    -- 1. Quét từ Inventory Save.Get()
+    -- 1. Quét từ Inventory Save.Get() across ALL categories
     if Modules.Save and Modules.Save.Get then
         pcall(function()
             local inv = Modules.Save.Get().Inventory
             if type(inv) == "table" then
-                local checkCats = { "Tool", "Misc", "Consumable" }
-                for _, catName in ipairs(checkCats) do
-                    local catTable = inv[catName]
+                for catName, catTable in pairs(inv) do
                     if type(catTable) == "table" then
                         for _, item in pairs(catTable) do
                             if type(item) == "table" then
                                 local id = tostring(item.id or item._id or "")
-                                local amt = tonumber(item._am or item.amount or item.Count) or 1
-                                if id == "Ultra Pet Net" then
-                                    ultraNets = ultraNets + amt
-                                elseif id == "Pet Net" then
-                                    petNets = petNets + amt
+                                local amt = tonumber(item._am or item.amount or item.Count) or 0
+                                if amt > 0 then
+                                    if id == "Ultra Pet Net" then
+                                        ultraNets = ultraNets + amt
+                                    elseif id == "Pet Net" then
+                                        petNets = petNets + amt
+                                    end
                                 end
                             end
                         end
@@ -5217,17 +5246,7 @@ local function GetAvailablePetNets(plot)
         end)
     end
 
-    -- 2. Quét từ Plot Save ("Nets") nếu tycoon lưu trữ số lưới riêng
-    if plot and plot.Save then
-        pcall(function()
-            local plotNets = plot:Save("Nets")
-            if type(plotNets) == "table" then
-                petNets = math.max(petNets, tonumber(plotNets["Pet Net"] or plotNets[1]) or 0)
-                ultraNets = math.max(ultraNets, tonumber(plotNets["Ultra Pet Net"] or plotNets[2]) or 0)
-            end
-        end)
-    end
-
+    -- Tuyệt đối KHÔNG dùng plot:Save("Nets") vì đây là bảng cấu hình kệ hàng Tycoon, không phản ánh số lưới trong túi người chơi!
     return petNets, ultraNets
 end
 
@@ -5264,6 +5283,16 @@ local function StepWildPets(plot)
                 returnCF = calcCF
             end
 
+            -- Chặn tuyệt đối tele lạc về World Spawn: Nếu returnCF ở quá xa đảo (> 250 studs) hoặc cao độ thấp (< 500), dùng tâm đảo
+            local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+            local plotPivot = plotModel and plotModel:GetPivot()
+            if plotPivot and returnCF then
+                local distToIsland = (returnCF.Position - plotPivot.Position).Magnitude
+                if distToIsland > 250 or returnCF.Position.Y < 500 then
+                    returnCF = plotPivot + Vector3.new(0, 4, 0)
+                end
+            end
+
             if hrp and returnCF then
                 Log("INFO", "🎯 [WildPets] %s. Tele về lại bãi farm...", reason)
                 hrp.CFrame = returnCF
@@ -5287,6 +5316,14 @@ local function StepWildPets(plot)
     -- Nếu hết toàn bộ lưới -> Thoát chuỗi Catch Pet, tele về bãi farm và tắt Auto Farm
     if totalNets <= 0 then
         EndCatchingSession("Hết lưới trong túi. Chờ Merchant restock")
+        -- Đảm bảo nếu nhân vật đang đứng lạc ở khu spawn hoặc dưới thấp, lập tức kéo về bãi farm trên đảo
+        local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+        local plotPivot = plotModel and plotModel:GetPivot()
+        if plotPivot and hrp and ((hrp.Position - plotPivot.Position).Magnitude > 150 or hrp.Position.Y < 500) then
+            local _, farmCF = GetHighestUnlockedFarmPosition(plot)
+            hrp.CFrame = farmCF or (plotPivot + Vector3.new(0, 4, 0))
+            task.wait(0.2)
+        end
         return
     end
 
@@ -5383,6 +5420,20 @@ local function StepWildPets(plot)
                         if okSp and typeof(sp) == "Vector3" then
                             petPos = sp
                         end
+                    end
+
+                    -- BỘ LỌC TỌA ĐỘ PET HỢP LỆ TRÊN ĐẢO:
+                    -- Pet phải có tọa độ cụ thể và nằm trên đảo (cao độ > 500 studs, không rơi xuống khu World Spawn)
+                    local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+                    local plotPivot = plotModel and plotModel:GetPivot()
+                    local posValid = false
+                    if petPos and typeof(petPos) == "Vector3" and petPos.Y > 500 then
+                        if not plotPivot or (petPos - plotPivot.Position).Magnitude <= 400 then
+                            posValid = true
+                        end
+                    end
+                    if not posValid then
+                        valid = false
                     end
 
                     -- Quy tắc chấm điểm theo chuẩn dj: Shiny (5000) > Rainbow (3000) > Golden (1000) > Tier * 100
