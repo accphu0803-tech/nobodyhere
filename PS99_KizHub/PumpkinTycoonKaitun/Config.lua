@@ -71,8 +71,9 @@ local Config = {
         "AutoBreakRules",
     },
 
-    -- Trạm Hot Cocoa Boost
-    AutoHotCocoa = true,
+    -- Trạm Hot Cocoa Boost (ĐÃ TẮT THEO LỆNH DJ: BỎ QUA MÁY HOT COCOA STAND)
+    AutoHotCocoa = false,
+    AutoCocoaStand = false,
     CocoaInterval = 60,
     CocoaMinRemainingSeconds = 900, -- Mua thêm khi còn dưới 15 phút
     AutoConsumeBoosts = true,

@@ -133,7 +133,7 @@ local DEFAULT_CONFIG = {
         ["Island Luck Boost"] = true,
     },
 
-    AutoCocoaStand = true,
+    AutoCocoaStand = false, -- Đã tắt theo lệnh dj: bỏ qua Hot Cocoa Stand
     CocoaRequireButtonsComplete = true,
     CocoaActivateCoins = 300000000,  -- Activate Hot Cocoa Stand at >= 300M Patch Coins
     CocoaMaintainMinutes = 2,
@@ -1510,7 +1510,7 @@ local NET = (PT and PT.NET) or {
     CocoaBuyTime = "VB_Extend",
     Complete = "BT_Settle",
     Complete2 = "MH_Conclude",
-    GiftOpen = "YR_Hydrate",
+    GiftOpen = "KX_Release",
     NetShelf = "QS_Survey",
     PlaceStock = "XC_Allocate",
     Rebirth = "EW_Renew",
@@ -3059,16 +3059,12 @@ local function StepUpgrades(plot, buttons)
         return
     end
 
-    local catchupRatio = tonumber(Config.UpgradeCheapCatchupRatio) or 0
-    local maxCheapTier1 = tonumber(Config.UpgradeCheapTier1MaxBaseCost) or 50
-    local maxBuys = 15
-    for _ = 1, maxBuys do
-        if not IsRunning() then
-            break
-        end
-        local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-        Runtime.Stats.Tokens = tokens
+    local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+    Runtime.Stats.Tokens = tokens
 
+    local function FindAffordableUpgrade(currentTokens)
+        local catchupRatio = tonumber(Config.UpgradeCheapCatchupRatio) or 0
+        local maxCheapTier1 = tonumber(Config.UpgradeCheapTier1MaxBaseCost) or 50
         local infos = {}
         local pendingCheapTier1 = nil
         local topCandidate = nil
@@ -3090,13 +3086,11 @@ local function StepUpgrades(plot, buttons)
         end
 
         local selected = nil
-        if pendingCheapTier1 then
-            if tokens >= pendingCheapTier1.cost then
-                selected = pendingCheapTier1
-            end
+        if pendingCheapTier1 and currentTokens >= pendingCheapTier1.cost then
+            selected = pendingCheapTier1
         elseif topCandidate then
             for _, info in ipairs(infos) do
-                if tokens >= info.cost then
+                if currentTokens >= info.cost then
                     if info == topCandidate then
                         selected = info
                         break
@@ -3107,21 +3101,54 @@ local function StepUpgrades(plot, buttons)
                 end
             end
         end
-
-        if not selected then
-            break
-        end
-
-        local ok, res = pcall(function()
-            return plot:Invoke(NET.UpgradeBuy, selected.track)
-        end)
-        if not ok or res == false then
-            break
-        end
-        Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-        Log("INFO", "Upgraded [%s] to Tier %d for %s Tokens", selected.track, selected.nextTier, tostring(selected.cost))
-        task.wait(0.04)
+        return selected
     end
+
+    -- Kiểm tra trước xem có bất kỳ nâng cấp nào đủ tiền mua không (tránh tele không cần thiết)
+    local firstSelected = FindAffordableUpgrade(tokens)
+    if not firstSelected then
+        return
+    end
+
+    -- Theo yêu cầu chuẩn dj: Nâng cấp tại Upgrade Machine bằng Pumpkin Tokens yêu cầu tiếp cận bệ máy (Proximity)
+    WithMachinePad(plot, "UpgradeMachine", 80, function()
+        local maxBuys = 15
+        for _ = 1, maxBuys do
+            if not IsRunning() then
+                break
+            end
+            tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+            Runtime.Stats.Tokens = tokens
+
+            local selected = FindAffordableUpgrade(tokens)
+            if not selected then
+                break
+            end
+
+            local ok, res = pcall(function()
+                return plot:Invoke(NET.UpgradeBuy, selected.track)
+            end)
+            if not ok or res == false then
+                -- Fallback các Remote event khác nếu plot:Invoke chưa nhận
+                local boughtFallback = false
+                if Modules.Network and Modules.Network.Invoke then
+                    local okNet, resNet = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", selected.track)
+                    if okNet and resNet ~= false then boughtFallback = true end
+                    if not boughtFallback then
+                        local okNet2, resNet2 = pcall(Modules.Network.Invoke, "Upgrades_Purchase", selected.track)
+                        if okNet2 and resNet2 ~= false then boughtFallback = true end
+                    end
+                end
+                if not boughtFallback then
+                    break
+                end
+            end
+
+            Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+            Log("INFO", "Upgraded [%s] to Tier %d for %s Tokens", selected.track, selected.nextTier, tostring(selected.cost))
+            task.wait(0.06)
+        end
+    end)
 end
 
 -- ============================================================================
@@ -3385,78 +3412,107 @@ local function StepOpenFlannelGifts()
     local opened = false
     local debugRes = {}
 
-    -- Phương thức 1: Trực tiếp gọi RemoteFunction ReplicatedStorage.Network.YR_Hydrate (Remote mở Gift Tycoon chuẩn)
-    local yrHydrate = (RS:FindFirstChild("Network") and RS.Network:FindFirstChild("YR_Hydrate")) or (Modules.Network and Modules.Network.YR_Hydrate)
-    if yrHydrate and yrHydrate:IsA("RemoteFunction") then
+    -- Hàm tự động đóng mọi Popup lỗi / Oops / Message nếu game hiện ra
+    local function DismissOopsPopups()
+        pcall(function()
+            local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+            if not pGui then return end
+            for _, name in ipairs({ "Message", "Oops", "Dialog", "Alert" }) do
+                local g = pGui:FindFirstChild(name)
+                if g and g.Enabled then
+                    local okBtn = g:FindFirstChild("Ok", true) or g:FindFirstChild("Yes", true) or g:FindFirstChild("Button", true)
+                    if okBtn and okBtn:IsA("GuiButton") and type(getconnections) == "function" then
+                        for _, conn in ipairs(getconnections(okBtn.MouseButton1Click or okBtn.Activated)) do
+                            conn:Fire()
+                        end
+                    end
+                    g.Enabled = false
+                end
+            end
+        end)
+    end
+
+    -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với tên và số lượng
+    if not opened and Modules.Network and Modules.Network.Invoke then
         local ok1, res1 = pcall(function()
-            return yrHydrate:InvokeServer(giftUid, count, positions, false)
+            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
         end)
         debugRes.res1 = tostring(res1)
-        if ok1 and (res1 == true or type(res1) == "table") then
+        if ok1 and res1 ~= false and res1 ~= nil then
             opened = true
-        end
-
-        -- 1B: Nếu vị trí raycast kẹt -> Thử gọi với cờ true (Instant Open / Skip Placement)
-        if not opened then
-            local ok1B, res1B = pcall(function()
-                return yrHydrate:InvokeServer(giftUid, count, positions, true)
-            end)
-            debugRes.res1B = tostring(res1B)
-            if ok1B and (res1B == true or type(res1B) == "table") then
-                opened = true
-            end
-        end
-
-        -- 1C: Gọi với positions rỗng và cờ true
-        if not opened then
-            local ok1C, res1C = pcall(function()
-                return yrHydrate:InvokeServer(giftUid, count, {}, true)
-            end)
-            debugRes.res1C = tostring(res1C)
-            if ok1C and (res1C == true or type(res1C) == "table") then
-                opened = true
-            end
         end
     end
 
-    -- Phương thức 2: Gọi qua Plot:Invoke(NET.GiftOpen, ...) (Map đúng NET.GiftOpen = "YR_Hydrate")
+    -- Phương thức 1B: "Lootbox: Open" trực tiếp qua ReplicatedStorage.Network
+    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootbox: Open") then
+        local ok1B, res1B = pcall(function()
+            return RS.Network["Lootbox: Open"]:InvokeServer(giftName, count)
+        end)
+        debugRes.res1B = tostring(res1B)
+        if ok1B and res1B ~= false and res1B ~= nil then
+            opened = true
+        end
+    end
+
+    -- Phương thức 1C: "Lootbox: Open" với giftUid
+    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootbox: Open") then
+        local ok1C, res1C = pcall(function()
+            return RS.Network["Lootbox: Open"]:InvokeServer(giftUid, count)
+        end)
+        debugRes.res1C = tostring(res1C)
+        if ok1C and res1C ~= false and res1C ~= nil then
+            opened = true
+        end
+    end
+
+    -- Phương thức 2: Remote GiftBag_Open nếu Flannel Gift được game coi là GiftBag
+    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("GiftBag_Open") then
+        local ok2, res2 = pcall(function()
+            return RS.Network.GiftBag_Open:InvokeServer(giftUid, count)
+        end)
+        debugRes.res2 = tostring(res2)
+        if ok2 and res2 ~= false and res2 ~= nil then
+            opened = true
+        end
+    end
+
+    -- Phương thức 3: Remote Lootables_Open
+    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Lootables_Open") then
+        local ok3, res3 = pcall(function()
+            return RS.Network.Lootables_Open:InvokeServer(giftUid, count)
+        end)
+        debugRes.res3 = tostring(res3)
+        if ok3 and res3 ~= false and res3 ~= nil then
+            opened = true
+        end
+    end
+
+    -- Phương thức 4: Remote Tycoon KX_Release (đã đối soát trong Part 2 dump)
     if not opened then
         pcall(function()
             local plot = GetMyPlot()
             if plot and plot.Invoke then
-                local res3 = plot:Invoke(NET.GiftOpen, giftUid, count, positions, false)
-                debugRes.res3 = tostring(res3)
-                if res3 == true or type(res3) == "table" then
+                local res4 = plot:Invoke("KX_Release", giftUid, count, positions)
+                debugRes.res4 = tostring(res4)
+                if res4 == true or type(res4) == "table" then
                     opened = true
                 end
             end
         end)
     end
 
-    -- Phương thức 3: Gọi qua RemoteFunction PumpkinTycoon_GiftOpen
-    if not opened then
-        local ptGiftOpen = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("PumpkinTycoon_GiftOpen")
-        if ptGiftOpen and ptGiftOpen:IsA("RemoteFunction") then
-            local okPt, resPt = pcall(function()
-                return ptGiftOpen:InvokeServer(giftUid, count)
-            end)
-            debugRes.resPt = tostring(resPt)
-            if okPt and (resPt == true or type(resPt) == "table") then
-                opened = true
-            end
-        end
-    end
-
-    -- Phương thức 4: Remote Lootbox tiêu chuẩn PS99 ("Lootbox: Open")
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        local ok4, res4 = pcall(function()
-            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+    -- Phương thức 5: Remote Function PumpkinTycoon_GiftOpen
+    if not opened and RS:FindFirstChild("Network") and RS.Network:FindFirstChild("PumpkinTycoon_GiftOpen") then
+        local okPt, resPt = pcall(function()
+            return RS.Network.PumpkinTycoon_GiftOpen:InvokeServer(giftUid, count)
         end)
-        debugRes.res4 = tostring(res4)
-        if ok4 and res4 ~= false and res4 ~= nil then
+        debugRes.resPt = tostring(resPt)
+        if okPt and (resPt == true or type(resPt) == "table") then
             opened = true
         end
     end
+
+    DismissOopsPopups()
 
     if opened then
         Runtime.Stats.GiftsOpened = Runtime.Stats.GiftsOpened + count
@@ -4835,6 +4891,7 @@ local WildPetsState = {
     LastRestockAt = 0,
     LastHuntSyncAt = 0,
     CaughtCount = 0,
+    RecentCatches = {},          -- [slotNum] = expireTimestamp (chống kẹt slot vừa bắt do client cache chưa kịp xóa)
     LastSightingCheckAt = 0,
     SavedFarmCF = nil,          -- Lưu vị trí bãi farm trước khi tele đi bắt pet
     IsCatchingSession = false,  -- Cờ trạng thái đang trong phiên tele bắt pet
@@ -4957,6 +5014,13 @@ local function StepWildPets(plot)
     local wildData = plot:Save(VAR.Wild) or (PT_Wild and PT_Wild.All and PT_Wild.All())
     if type(wildData) ~= "table" then return end
 
+    -- Dọn dẹp cache các slot đã hết thời gian cooldown
+    for sNum, expAt in pairs(WildPetsState.RecentCatches) do
+        if now >= expAt then
+            WildPetsState.RecentCatches[sNum] = nil
+        end
+    end
+
     local tierMap = { ["Any"] = 0, ["Uncommon+"] = 1, ["Rare+"] = 2, ["Epic+"] = 3, ["Huges only"] = 4 }
     local minTier = tierMap[Config.WildMinTier] or 0
 
@@ -4966,47 +5030,50 @@ local function StepWildPets(plot)
     for slotKey, info in pairs(wildData) do
         local slotNum = tonumber(slotKey)
         if slotNum and type(info) == "table" then
-            local petId = tostring(info.P or info.PetId or "")
-            local isHuge = string.find(petId, "Huge") ~= nil or string.find(petId, "Titanic") ~= nil or string.find(petId, "Gargantuan") ~= nil
-            local tier = isHuge and 4 or (tonumber(info.Tier) or 0)
-            local isShiny = (info.S == true)
-            local isRainbow = (info.R == true)
-            local isGolden = (info.G == true)
-            local isVariant = (isShiny or isRainbow or isGolden)
+            -- Bỏ qua slot này nếu vừa mới bắt hoặc vừa ném trong 20s qua (tránh kẹt lặp lại slot cũ do cache client chưa xóa)
+            if not (WildPetsState.RecentCatches[slotNum] and now < WildPetsState.RecentCatches[slotNum]) then
+                local petId = tostring(info.P or info.PetId or "")
+                local isHuge = string.find(petId, "Huge") ~= nil or string.find(petId, "Titanic") ~= nil or string.find(petId, "Gargantuan") ~= nil
+                local tier = isHuge and 4 or (tonumber(info.Tier) or 0)
+                local isShiny = (info.S == true)
+                local isRainbow = (info.R == true)
+                local isGolden = (info.G == true)
+                local isVariant = (isShiny or isRainbow or isGolden)
 
-            local valid = isHuge or (tier >= minTier)
-            if Config.WildVariantsOnly and not isVariant and not isHuge then
-                valid = false
-            end
-
-            if valid then
-                local phys = PT_Wild and PT_Wild.Physical and PT_Wild.Physical(slotNum)
-                local petPos = nil
-                if phys then
-                    petPos = phys:IsA("Model") and (phys.PrimaryPart and phys.PrimaryPart.Position or phys:GetPivot().Position)
-                        or (phys:IsA("BasePart") and phys.Position)
+                local valid = isHuge or (tier >= minTier)
+                if Config.WildVariantsOnly and not isVariant and not isHuge then
+                    valid = false
                 end
 
-                -- Quy tắc chấm điểm theo chuẩn dj: Shiny (5000) > Rainbow (3000) > Golden (1000) > Tier * 100
-                local variantScore = (isShiny and 5000 or 0) + (isRainbow and 3000 or 0) + (isGolden and 1000 or 0) + (tier * 100)
+                if valid then
+                    local phys = PT_Wild and PT_Wild.Physical and PT_Wild.Physical(slotNum)
+                    local petPos = nil
+                    if phys then
+                        petPos = phys:IsA("Model") and (phys.PrimaryPart and phys.PrimaryPart.Position or phys:GetPivot().Position)
+                            or (phys:IsA("BasePart") and phys.Position)
+                    end
 
-                local cand = {
-                    slot = slotNum,
-                    petId = petId,
-                    isHuge = isHuge,
-                    tier = tier,
-                    isShiny = isShiny,
-                    isRainbow = isRainbow,
-                    isGolden = isGolden,
-                    score = variantScore,
-                    phys = phys,
-                    pos = petPos,
-                }
+                    -- Quy tắc chấm điểm theo chuẩn dj: Shiny (5000) > Rainbow (3000) > Golden (1000) > Tier * 100
+                    local variantScore = (isShiny and 5000 or 0) + (isRainbow and 3000 or 0) + (isGolden and 1000 or 0) + (tier * 100)
 
-                if isHuge then
-                    table.insert(hugeCandidates, cand)
-                else
-                    table.insert(normalCandidates, cand)
+                    local cand = {
+                        slot = slotNum,
+                        petId = petId,
+                        isHuge = isHuge,
+                        tier = tier,
+                        isShiny = isShiny,
+                        isRainbow = isRainbow,
+                        isGolden = isGolden,
+                        score = variantScore,
+                        phys = phys,
+                        pos = petPos,
+                    }
+
+                    if isHuge then
+                        table.insert(hugeCandidates, cand)
+                    else
+                        table.insert(normalCandidates, cand)
+                    end
                 end
             end
         end
@@ -5093,9 +5160,21 @@ local function StepWildPets(plot)
             end
         end
 
+        -- 4. Fallback qua RoamingPets_CatchPet nếu plot:Invoke chưa nhận
+        if not okThrow or (resThrow ~= true and (type(resThrow) ~= "table" or resThrow.Success == false)) then
+            if Modules.Network and Modules.Network.Invoke then
+                local okRoam, resRoam = pcall(Modules.Network.Invoke, "RoamingPets_CatchPet", targetPet.slot, netType)
+                if okRoam and (resRoam == true or (type(resRoam) == "table" and resRoam.Success ~= false)) then
+                    okThrow = true
+                    resThrow = resRoam
+                end
+            end
+        end
+
         -- Kiểm tra phản hồi thực tế từ server
         local isSuccess = okThrow and (resThrow == true or (type(resThrow) == "table" and (resThrow.Success == true or resThrow.Caught == true)))
         if isSuccess then
+            WildPetsState.RecentCatches[targetPet.slot] = now + 25 -- Blacklist slot này 25s để vòng lặp sau tự động chuyển sang pet tiếp theo
             WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
             Runtime.Stats.WildCaught = WildPetsState.CaughtCount
             Log("INFO", "🎯 [WildPets] %s BẮT THÀNH CÔNG pet slot #%d (%s, Shiny=%s, RB=%s, Gold=%s) bằng %s! (Tổng bắt: %d)",
@@ -5103,6 +5182,7 @@ local function StepWildPets(plot)
                 targetPet.slot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
                 netType, WildPetsState.CaughtCount)
         else
+            WildPetsState.RecentCatches[targetPet.slot] = now + 10 -- Thất bại (slot ma hoặc trống): giữ cooldown 10s để vòng sau bắt con khác ngay
             Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, net: %s) -> Server: %s",
                 targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
         end
@@ -5133,58 +5213,69 @@ local function StepPetNetMerchant(plot)
     lastPetNetStoreCheck = now
 
     pcall(function()
-        -- 1. Tiếp cận máy PetNetStore nếu cần thiết (Machine Approached)
-        if Modules.Network and Modules.Network.Fire then
+        local petNets, ultraNets = GetAvailablePetNets(plot)
+        local needPad = (petNets + ultraNets) <= 0
+
+        local function ExecuteBuyNets()
+            -- 1. Tiếp cận máy PetNetStore nếu cần thiết (Machine Approached)
+            if Modules.Network and Modules.Network.Fire then
+                pcall(function()
+                    Modules.Network.Fire("Machines: Mark Approached", "PetNetStore")
+                end)
+            end
+
+            -- 2. Đảm bảo cờ Restock Auto Nets (GN_Restock) luôn BẬT trên Plot Tycoon
             pcall(function()
-                Modules.Network.Fire("Machines: Mark Approached", "PetNetStore")
+                plot:Invoke(NET.SetAutoNets, true)
             end)
-        end
 
-        -- 2. Đảm bảo cờ Restock Auto Nets (GN_Restock) luôn BẬT trên Plot Tycoon
-        pcall(function()
-            plot:Invoke(NET.SetAutoNets, true)
-        end)
+            -- 3. Gọi Remote Tycoon mua trực tiếp lưới từ Net Store trên đảo (NET.BuyNet = "ZK_Barter")
+            pcall(function()
+                -- Mua Ultra Pet Net (ưu tiên hàng đầu)
+                plot:Invoke(NET.BuyNet, "Ultra Pet Net", 5)
+                plot:Invoke(NET.BuyNet, 2, 5)
+                -- Mua Pet Net thường
+                plot:Invoke(NET.BuyNet, "Pet Net", 10)
+                plot:Invoke(NET.BuyNet, 1, 10)
+            end)
 
-        -- 3. Gọi Remote Tycoon mua trực tiếp lưới từ Net Store trên đảo (NET.BuyNet = "ZK_Barter")
-        pcall(function()
-            -- Mua Ultra Pet Net (ưu tiên hàng đầu)
-            plot:Invoke(NET.BuyNet, "Ultra Pet Net", 5)
-            plot:Invoke(NET.BuyNet, 2, 5)
-            -- Mua Pet Net thường
-            plot:Invoke(NET.BuyNet, "Pet Net", 10)
-            plot:Invoke(NET.BuyNet, 1, 10)
-        end)
+            -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
+            local offers = nil
+            if Modules.Network and Modules.Network.Invoke then
+                local okO, resO = pcall(Modules.Network.Invoke, "Merchant_GetOffers", "PetNetStore")
+                if okO and type(resO) == "table" then offers = resO end
+            elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_GetOffers") then
+                local okO, resO = pcall(function() return RS.Network.Merchant_GetOffers:InvokeServer("PetNetStore") end)
+                if okO and type(resO) == "table" then offers = resO end
+            end
 
-        -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
-        local offers = nil
-        if Modules.Network and Modules.Network.Invoke then
-            local okO, resO = pcall(Modules.Network.Invoke, "Merchant_GetOffers", "PetNetStore")
-            if okO and type(resO) == "table" then offers = resO end
-        elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_GetOffers") then
-            local okO, resO = pcall(function() return RS.Network.Merchant_GetOffers:InvokeServer("PetNetStore") end)
-            if okO and type(resO) == "table" then offers = resO end
-        end
-
-        if type(offers) == "table" then
-            for slotKey, offer in pairs(offers) do
-                local slotNum = tonumber(slotKey)
-                if slotNum and type(offer) == "table" then
-                    local inStock = (offer.Stock == nil) or (tonumber(offer.Stock) or 0) > 0
-                    if inStock then
-                        local bought = false
-                        if Modules.Network and Modules.Network.Invoke then
-                            local okB, resB = pcall(Modules.Network.Invoke, "Merchant_RequestPurchase", "PetNetStore", slotNum)
-                            if okB and resB ~= false then bought = true end
-                        elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_RequestPurchase") then
-                            local okB, resB = pcall(function() return RS.Network.Merchant_RequestPurchase:InvokeServer("PetNetStore", slotNum) end)
-                            if okB and resB ~= false then bought = true end
-                        end
-                        if bought then
-                            Log("INFO", "🛒 [PetNetStore] Đã tự động mua lưới từ Merchant Slot #%d (%s)!", slotNum, tostring(offer.Item or "Net"))
+            if type(offers) == "table" then
+                for slotKey, offer in pairs(offers) do
+                    local slotNum = tonumber(slotKey)
+                    if slotNum and type(offer) == "table" then
+                        local inStock = (offer.Stock == nil) or (tonumber(offer.Stock) or 0) > 0
+                        if inStock then
+                            local bought = false
+                            if Modules.Network and Modules.Network.Invoke then
+                                local okB, resB = pcall(Modules.Network.Invoke, "Merchant_RequestPurchase", "PetNetStore", slotNum)
+                                if okB and resB ~= false then bought = true end
+                            elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_RequestPurchase") then
+                                local okB, resB = pcall(function() return RS.Network.Merchant_RequestPurchase:InvokeServer("PetNetStore", slotNum) end)
+                                if okB and resB ~= false then bought = true end
+                            end
+                            if bought then
+                                Log("INFO", "🛒 [PetNetStore] Đã tự động mua lưới từ Merchant Slot #%d (%s)!", slotNum, tostring(offer.Item or "Net"))
+                            end
                         end
                     end
                 end
             end
+        end
+
+        if needPad then
+            WithMachinePad(plot, "PetNetStore", 80, ExecuteBuyNets)
+        else
+            ExecuteBuyNets()
         end
     end)
 end
