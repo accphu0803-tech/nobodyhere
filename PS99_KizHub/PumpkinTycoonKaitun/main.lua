@@ -1669,8 +1669,25 @@ local function EnsureNearMachinePad(plot, machineName, rangeFn, standOnPad)
     return true
 end
 
+local function GetSafePlotModel(plot)
+    if not plot then return nil end
+    local ok, m = pcall(function()
+        if type(plot.GetModel) == "function" then
+            return plot:GetModel()
+        end
+        if typeof(plot) == "Instance" then
+            return plot:FindFirstChild("Model") or plot
+        end
+        return nil
+    end)
+    if ok and m and typeof(m) == "Instance" then
+        return m
+    end
+    return nil
+end
+
 local function FindMachinePadCFrame(plot, machineName)
-    local plotModel = plot and plot.GetModel and plot:GetModel()
+    local plotModel = GetSafePlotModel(plot)
     local lName = tostring(machineName):lower()
 
     -- 1. Ưu tiên tuyệt đối Upgrade Machine theo dữ liệu capture thực tế từ dj:
@@ -1687,7 +1704,7 @@ local function FindMachinePadCFrame(plot, machineName)
             end
         end
 
-        local plotPivot = (plotModel and plotModel:GetPivot()) or (plot and plot.GetPivot and plot:GetPivot())
+        local plotPivot = plotModel and plotModel:GetPivot()
         if plotPivot then
             local exactPos = plotPivot:PointToWorldSpace(Vector3.new(41.09, -0.85, 135.32))
             local exactCF = CFrame.new(exactPos + Vector3.new(0, 1.2, 0))
@@ -1723,7 +1740,7 @@ local function FindMachinePadCFrame(plot, machineName)
         local btnFolder = plotModel:FindFirstChild("Buttons")
         if btnFolder then table.insert(searchRoots, btnFolder) end
     end
-    if plot and plot.Buttons then
+    if plot and type(plot) == "table" and plot.Buttons then
         table.insert(searchRoots, plot.Buttons)
     end
     if Workspace:FindFirstChild("PumpkinTycoonPads") then table.insert(searchRoots, Workspace.PumpkinTycoonPads) end
@@ -3139,25 +3156,14 @@ local function GetTrackNextInfo(trackKey)
     end
 
     local baseCost = row and row.Costs and row.Costs[tier + 1]
+    if not baseCost and row and row.Powers and row.Powers[tier + 1] and row.Powers[tier + 1].Cost then
+        baseCost = row.Powers[tier + 1].Cost
+    end
     if not baseCost and PT_Upgrades and PT_Upgrades.Cost then
         local okCost, c = pcall(PT_Upgrades.Cost, trackKey)
         if okCost and type(c) == "number" then
             baseCost = c
         end
-    end
-    if not baseCost and ReplicatedStorage:FindFirstChild("__DIRECTORY") then
-        pcall(function()
-            local evDir = ReplicatedStorage.__DIRECTORY:FindFirstChild("EventUpgrades")
-            local ptDir = evDir and evDir:FindFirstChild("Event") and evDir.Event:FindFirstChild("PumpkinTycoon")
-            local mod = ptDir and (ptDir:FindFirstChild(fullUpgradeId) or ptDir:FindFirstChild(trackKey))
-            if mod and mod:IsA("ModuleScript") then
-                local def = require(mod)
-                if def and def.TierCosts and def.TierCosts[tier + 1] then
-                    local tc = def.TierCosts[tier + 1]
-                    baseCost = (tc._data and tc._data._am) or (type(tc.GetAmount) == "function" and tc:GetAmount()) or tc._am or tc.amount
-                end
-            end
-        end)
     end
     if not baseCost then
         baseCost = (tier + 1) * 10
@@ -3167,14 +3173,41 @@ local function GetTrackNextInfo(trackKey)
     return { track = trackKey, fullId = fullUpgradeId, nextTier = tier + 1, baseCost = baseCost, cost = liveCost }
 end
 
+local function GetAllUpgradeTracks()
+    local tracks = {}
+    local seen = {}
+    for _, t in ipairs(Config.UpgradePriority or {}) do
+        if not seen[t] then
+            seen[t] = true
+            table.insert(tracks, t)
+        end
+    end
+    if Modules.UpgradesTypes and type(Modules.UpgradesTypes.ROWS) == "table" then
+        for t, _ in pairs(Modules.UpgradesTypes.ROWS) do
+            if not seen[t] then
+                seen[t] = true
+                table.insert(tracks, t)
+            end
+        end
+    end
+    local defaults = {
+        "SpawnLuck", "PumpkinCoins", "PumpkinDamage", "RespawnSpeed",
+        "StockSlots", "ChaseOdds", "EggLuck", "MerchantLuck"
+    }
+    for _, t in ipairs(defaults) do
+        if not seen[t] then
+            seen[t] = true
+            table.insert(tracks, t)
+        end
+    end
+    return tracks
+end
+
 local function GetCheapestAffordableUpgrade(currentTokens)
     if not currentTokens or currentTokens <= 0 then
         return nil
     end
-    local tracks = Config.UpgradePriority or {
-        "SpawnLuck", "PumpkinCoins", "PumpkinDamage", "RespawnSpeed",
-        "StockSlots", "ChaseOdds", "EggLuck", "MerchantLuck"
-    }
+    local tracks = GetAllUpgradeTracks()
     local candidates = {}
     for _, trackKey in ipairs(tracks) do
         local info = GetTrackNextInfo(trackKey)
@@ -3188,7 +3221,10 @@ local function GetCheapestAffordableUpgrade(currentTokens)
         return nil
     end
     table.sort(candidates, function(a, b)
-        return a.cost < b.cost
+        if a.cost ~= b.cost then
+            return a.cost < b.cost
+        end
+        return a.nextTier < b.nextTier
     end)
     return candidates[1], candidates
 end
@@ -3197,10 +3233,13 @@ local function StepUpgrades(plot, buttons)
     if not Config.AutoUpgrades or not plot then
         return
     end
-    if Runtime.State and Runtime.State.FightingTurkey then
+    if Runtime.State and (Runtime.State.FightingTurkey or Runtime.State.CatchingSighting) then
         return
     end
-    -- Chống spam liên tục khi thất bại hoặc đang trong cooldown (Triệt tiêu hiện tượng "tele loạn"!)
+    if WildPetsState and WildPetsState.IsCatchingSession then
+        return
+    end
+    -- Chống spam liên tục khi thất bại hoặc đang trong cooldown
     if os.clock() < (Runtime.Cache.LastUpgradeAttempt or 0) then
         return
     end
@@ -3214,7 +3253,7 @@ local function StepUpgrades(plot, buttons)
         end
     end
     if not isOwned then
-        local pModel = (plot and plot.Model) or (plot and plot:FindFirstChild("Model"))
+        local pModel = GetSafePlotModel(plot)
         if pModel and (pModel:FindFirstChild("PumpkinTycoonUpgradeMachine", true) or pModel:FindFirstChild("UpgradeMachine", true)) then
             isOwned = true
         end
@@ -3229,157 +3268,84 @@ local function StepUpgrades(plot, buttons)
         return
     end
 
-    -- Cheaper First: Luôn ưu tiên nâng cấp rẻ nhất để tối ưu sức mạnh
-    local cheapest = GetCheapestAffordableUpgrade(tokens)
-    if not cheapest then
-        return
-    end
+    -- ĐÚNG THEO MESSAGE.TXT: NÂNG CẤP TỪ XA QUA REMOTE HOÀN TOÀN (KHÔNG TELE NHÂN VẬT, KHÔNG DÙNG PAD)
+    local maxBuys = 25
+    local boughtAny = false
+    for _ = 1, maxBuys do
+        if not IsRunning() then break end
+        tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+        Runtime.Stats.Tokens = tokens
+        if tokens <= 0 then break end
 
-    Runtime.State.ActiveTask = "UPGRADING"
-    AcquireMoveLock(35)
+        local selected = GetCheapestAffordableUpgrade(tokens)
+        if not selected then
+            break
+        end
 
-    WithMachinePad(plot, "UpgradeMachine", 80, function()
-        task.wait(0.15) -- Chờ bệ pad kích hoạt và UI nâng cấp hiển thị
+        local trackKey = selected.track
+        local fullUpgradeId = selected.fullId or ("PumpkinTycoon" .. trackKey)
+        local bought = false
 
-        local maxBuys = 30
-        for _ = 1, maxBuys do
-            if not IsRunning() then
-                break
-            end
-            tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-            Runtime.Stats.Tokens = tokens
+        -- 1. Chuẩn message.txt line 2773: plot:Invoke(NET.UpgradeBuy, selected.track)
+        pcall(function()
+            local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey)
+            if r == true or type(r) == "table" then bought = true end
+        end)
 
-            local selected = GetCheapestAffordableUpgrade(tokens)
-            if not selected then
-                break -- Đã mua sạch tất cả nâng cấp có thể mua!
-            end
-
-            local trackKey = selected.track
-            local fullUpgradeId = selected.fullId or ("PumpkinTycoon" .. trackKey)
-            local tokensBefore = tokens
-            local bought = false
-
-            -- 1. Thử qua plot:Invoke(NET.UpgradeBuy, trackKey)
+        -- 2. Fallback plot:Invoke với fullUpgradeId
+        if not bought and fullUpgradeId ~= trackKey then
             pcall(function()
-                local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey)
+                local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", fullUpgradeId)
                 if r == true or type(r) == "table" then bought = true end
             end)
+        end
 
-            -- 2. Thử qua plot:Invoke(NET.UpgradeBuy, fullUpgradeId)
+        -- 3. Fallback plot:Invoke với trackKey, nextTier
+        if not bought then
+            pcall(function()
+                local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey, selected.nextTier)
+                if r == true or type(r) == "table" then bought = true end
+            end)
+        end
+
+        -- 4. Fallback EventUpgradeCmds.Purchase
+        if not bought and Modules.EventUpgradeCmds and type(Modules.EventUpgradeCmds.Purchase) == "function" then
+            pcall(function()
+                local r = Modules.EventUpgradeCmds.Purchase(fullUpgradeId)
+                if r == true then bought = true end
+            end)
+        end
+
+        -- 5. Fallback Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+        if not bought and Modules.Network and type(Modules.Network.Invoke) == "function" then
+            pcall(function()
+                local r = Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+                if r == true then bought = true end
+            end)
             if not bought then
                 pcall(function()
-                    local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", fullUpgradeId)
-                    if r == true or type(r) == "table" then bought = true end
-                end)
-            end
-
-            -- 3. Thử qua plot:Invoke(NET.UpgradeBuy, trackKey, nextTier)
-            if not bought then
-                pcall(function()
-                    local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey, selected.nextTier)
-                    if r == true or type(r) == "table" then bought = true end
-                end)
-            end
-
-            -- 4. Thử qua EventUpgradeCmds.Purchase / Buy
-            if not bought and Modules.EventUpgradeCmds then
-                pcall(function()
-                    if type(Modules.EventUpgradeCmds.Purchase) == "function" then
-                        local r = Modules.EventUpgradeCmds.Purchase(fullUpgradeId)
-                        if r == true then bought = true end
-                    end
-                    if not bought and type(Modules.EventUpgradeCmds.Buy) == "function" then
-                        local r = Modules.EventUpgradeCmds.Buy(fullUpgradeId)
-                        if r == true then bought = true end
-                    end
-                end)
-            end
-
-            -- 5. Thử qua Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
-            if not bought and Modules.Network and Modules.Network.Invoke then
-                pcall(function()
-                    local r = Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+                    local r = Modules.Network.Invoke("EventUpgrades: Purchase", trackKey)
                     if r == true then bought = true end
                 end)
-                if not bought then
-                    pcall(function()
-                        local r = Modules.Network.Invoke("EventUpgrades: Purchase", trackKey)
-                        if r == true then bought = true end
-                    end)
-                end
-            end
-
-            -- 6. Thử trực tiếp qua ReplicatedStorage.Network["EventUpgrades: Purchase"]
-            local netFolder = ReplicatedStorage:FindFirstChild("Network")
-            if not bought and netFolder then
-                local rEvUp = netFolder:FindFirstChild("EventUpgrades: Purchase")
-                if rEvUp and rEvUp:IsA("RemoteFunction") then
-                    pcall(function()
-                        local r = rEvUp:InvokeServer(fullUpgradeId)
-                        if r == true then bought = true end
-                    end)
-                    if not bought then
-                        pcall(function()
-                            local r = rEvUp:InvokeServer(trackKey)
-                            if r == true then bought = true end
-                        end)
-                    end
-                end
-            end
-
-            -- 7. Kích hoạt trực tiếp Button mua trong PlayerGui nếu UI đang mở
-            if not bought then
-                pcall(function()
-                    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-                    if not pGui then return end
-                    for _, g in ipairs(pGui:GetChildren()) do
-                        if g:IsA("ScreenGui") and g.Enabled then
-                            local gn = g.Name:lower()
-                            if gn:find("upgrade") or gn:find("tycoon") or gn:find("machine") then
-                                for _, btn in ipairs(g:GetDescendants()) do
-                                    if btn:IsA("GuiButton") and btn.Visible then
-                                        local bn = btn.Name:lower()
-                                        local pn = (btn.Parent and btn.Parent.Name:lower()) or ""
-                                        local matches = (trackKey and (bn:find(trackKey:lower()) or pn:find(trackKey:lower())))
-                                            or (fullUpgradeId and (bn:find(fullUpgradeId:lower()) or pn:find(fullUpgradeId:lower())))
-                                        local isBuy = bn:find("buy") or bn:find("upgrade") or bn:find("purchase")
-                                        if isBuy or matches then
-                                            if type(getconnections) == "function" then
-                                                for _, conn in ipairs(getconnections(btn.MouseButton1Click or btn.Activated)) do
-                                                    conn:Fire()
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end)
-            end
-
-            task.wait(0.12)
-            local tokensAfter = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-            if tokensAfter < tokensBefore then
-                bought = true
-            end
-
-            if bought then
-                Runtime.Stats.Tokens = tokensAfter
-                Log("INFO", "🎯 [Upgrade Machine] Đã mua thành công [%s] (%s) lên Tier %d",
-                    trackKey, fullUpgradeId, selected.nextTier)
-                task.wait(0.1)
-            else
-                -- Mua không thành công: Thiết lập cooldown 10s để không spam và không tele loạn!
-                Runtime.Cache.LastUpgradeAttempt = os.clock() + 10.0
-                break
             end
         end
-    end)
 
-    -- WithMachinePad đã tự động đưa nhân vật trở lại vị trí bãi farm ban đầu! Không tele đè farmCF!
-    ReleaseMoveLock()
-    Runtime.State.ActiveTask = "FARMING"
+        if bought then
+            boughtAny = true
+            Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+            Log("INFO", "🎯 [Auto Upgrade] Nâng cấp thành công [%s] lên Tier %d (Giá: %d Tokens)",
+                trackKey, selected.nextTier, selected.cost)
+            task.wait(0.04)
+        else
+            -- Nếu remote chưa phản hồi hoặc hết tiền, đặt cooldown 5s
+            Runtime.Cache.LastUpgradeAttempt = os.clock() + 5.0
+            break
+        end
+    end
+
+    if boughtAny then
+        Runtime.Cache.LastUpgradeAttempt = 0
+    end
 end
 
 -- ============================================================================
@@ -3583,144 +3549,61 @@ local function StepOpenFlannelGifts()
 
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
 
-    -- Phương thức 0: LootboxCmds.Open từ Library Client
-    if not opened and Modules.LootboxCmds and type(Modules.LootboxCmds.Open) == "function" then
-        local realObj = nil
-        pcall(function()
-            if Modules.LootboxCmds.Get then
-                realObj = Modules.LootboxCmds.Get(giftUid)
-            end
-        end)
-        if not realObj and Modules.LootboxItem then
-            pcall(function()
-                local list = Modules.LootboxItem("Flannel Gift"):FindAny()
-                if list then
-                    if type(list.GetUID) == "function" then
-                        realObj = list
-                    elseif type(list) == "table" and list[1] then
-                        realObj = list[1]
-                    end
-                end
-            end)
-        end
-        if not realObj then
-            realObj = { class = "Lootbox", data = { id = giftName }, uid = giftUid }
-        end
-
-        local ok0A, res0A = pcall(Modules.LootboxCmds.Open, realObj, count)
-        if ok0A and (res0A == true or (res0A ~= false and res0A ~= nil)) then
-            opened = true
-        end
-        if not opened then
-            local ok0B, res0B = pcall(Modules.LootboxCmds.Open, giftName, count)
-            if ok0B and (res0B == true or (res0B ~= false and res0B ~= nil)) then
-                opened = true
-            end
-        end
-    end
-
-    -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với UID hoặc tên
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        local ok1, res1 = pcall(function()
-            return Modules.Network.Invoke("Lootbox: Open", giftUid, count)
-        end)
-        debugRes.res1 = tostring(res1)
-        if ok1 and res1 ~= false and res1 ~= nil then
-            opened = true
-        end
-        if not opened then
-            local ok1A, res1A = pcall(function()
-                return Modules.Network.Invoke("Lootbox: Open", giftName, count)
-            end)
-            if ok1A and res1A ~= false and res1A ~= nil then
-                opened = true
-            end
-        end
-    end
-
-    -- Phương thức 1B: "Lootbox: Open" trực tiếp qua ReplicatedStorage.Network
-    if not opened and netFolder then
-        local rLoot = netFolder:FindFirstChild("Lootbox: Open")
-        if rLoot and rLoot:IsA("RemoteFunction") then
-            local ok1B, res1B = pcall(function()
-                return rLoot:InvokeServer(giftUid, count)
-            end)
-            debugRes.res1B = tostring(res1B)
-            if ok1B and res1B ~= false and res1B ~= nil then
-                opened = true
-            end
-            if not opened then
-                local ok1C, res1C = pcall(function()
-                    return rLoot:InvokeServer(giftName, count)
-                end)
-                debugRes.res1C = tostring(res1C)
-                if ok1C and res1C ~= false and res1C ~= nil then
-                    opened = true
-                end
-            end
-        end
-    end
-
-    -- Phương thức 2: Remote GiftBag_Open & Lootables_Open với number argument trước (chuẩn ServerLootable)
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        pcall(function()
-            local res = Modules.Network.Invoke("Lootables_Open", count, giftName)
-            if res ~= false and res ~= nil then opened = true end
-        end)
-        if not opened then
-            pcall(function()
-                local res = Modules.Network.Invoke("Lootables_Open", count, giftUid)
-                if res ~= false and res ~= nil then opened = true end
-            end)
-        end
-        if not opened then
-            pcall(function()
-                local res = Modules.Network.Invoke("GiftBag_Open", count, giftName)
-                if res ~= false and res ~= nil then opened = true end
-            end)
-        end
-        if not opened then
-            pcall(function()
-                local res = Modules.Network.Invoke("GiftBag_Open", count, giftUid)
-                if res ~= false and res ~= nil then opened = true end
-            end)
-        end
-    end
-
-    -- Phương thức 3: Remote Tycoon YR_Hydrate & KX_Release (đối soát Dump Tycoon & Config VERBS)
+    -- Phương thức 1 (Chuẩn message.txt Section 10): Network.Invoke("YR_Hydrate", giftUid, count, positions)
     if not opened and Modules.Network and Modules.Network.Invoke then
         pcall(function()
             local res = Modules.Network.Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions)
-            if res == true or type(res) == "table" then opened = true end
+            if res == true or (type(res) == "table" and res.Success ~= false) then
+                opened = true
+            end
         end)
-        if not opened then
-            pcall(function()
-                local res = Modules.Network.Invoke("KX_Release", giftUid, count, positions)
-                if res == true or type(res) == "table" then opened = true end
-            end)
-        end
     end
+
+    -- Phương thức 2: plot:Invoke("YR_Hydrate", giftUid, count, positions)
     if not opened then
         pcall(function()
             local plot = GetMyPlot()
             if plot and plot.Invoke then
-                local res4A = plot:Invoke(NET.GiftOpen or "YR_Hydrate", count, positions)
-                if res4A == true or type(res4A) == "table" then opened = true end
-                if not opened then
-                    local res4B = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions, true)
-                    debugRes.res4 = tostring(res4B)
-                    if res4B == true or type(res4B) == "table" then opened = true end
+                local res = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions)
+                if res == true or (type(res) == "table" and res.Success ~= false) then
+                    opened = true
                 end
                 if not opened then
-                    local res4C = plot:Invoke("KX_Release", count, positions)
-                    if res4C == true or type(res4C) == "table" then opened = true end
-                end
-                if not opened then
-                    local res4D = plot:Invoke("KX_Release", giftUid, count, positions)
-                    if res4D == true or type(res4D) == "table" then opened = true end
+                    local res2 = plot:Invoke(NET.GiftOpen or "YR_Hydrate", count, positions)
+                    if res2 == true or (type(res2) == "table" and res2.Success ~= false) then
+                        opened = true
+                    end
                 end
             end
         end)
+    end
+
+    -- Phương thức 3: LootboxCmds.Open từ Library Client
+    if not opened and Modules.LootboxCmds and type(Modules.LootboxCmds.Open) == "function" then
+        pcall(function()
+            local res = Modules.LootboxCmds.Open(giftName, count)
+            if res == true or (res ~= false and res ~= nil) then opened = true end
+        end)
+        if not opened then
+            pcall(function()
+                local res = Modules.LootboxCmds.Open(giftUid, count)
+                if res == true or (res ~= false and res ~= nil) then opened = true end
+            end)
+        end
+    end
+
+    -- Phương thức 4: Remote "Lootbox: Open" tiêu chuẩn PS99
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        pcall(function()
+            local res = Modules.Network.Invoke("Lootbox: Open", giftUid, count)
+            if res ~= false and res ~= nil then opened = true end
+        end)
+        if not opened then
+            pcall(function()
+                local res = Modules.Network.Invoke("Lootbox: Open", giftName, count)
+                if res ~= false and res ~= nil then opened = true end
+            end)
+        end
     end
 
     DismissOopsPopups()
@@ -5132,15 +5015,116 @@ local function GetTycoonCaughtCount(plot)
     return count
 end
 
+local function ClickNativeSidebarButton(buttonKeywords, desiredState)
+    local clicked = false
+    pcall(function()
+        local lp = game:GetService("Players").LocalPlayer
+        local pGui = lp and (lp:FindFirstChildOfClass("PlayerGui") or lp:FindFirstChild("PlayerGui"))
+        if not pGui then return end
+
+        local targetBtn = nil
+        for _, gui in ipairs(pGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "KizHub_MiniTycoonGui" then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if (obj:IsA("GuiButton") or obj:IsA("ImageButton") or obj:IsA("TextButton")) and obj.Visible then
+                        local n = obj.Name:lower()
+                        local matched = false
+                        for _, kw in ipairs(buttonKeywords) do
+                            if n == kw:lower() or n:find(kw:lower(), 1, true) then
+                                matched = true
+                                break
+                            end
+                        end
+                        if not matched then
+                            for _, child in ipairs(obj:GetDescendants()) do
+                                if child:IsA("TextLabel") and child.Visible then
+                                    local t = child.Text:lower()
+                                    for _, kw in ipairs(buttonKeywords) do
+                                        if t:find(kw:lower(), 1, true) then
+                                            matched = true
+                                            break
+                                        end
+                                    end
+                                end
+                                if matched then break end
+                            end
+                        end
+                        if matched then
+                            targetBtn = obj
+                            break
+                        end
+                    end
+                end
+            end
+            if targetBtn then break end
+        end
+
+        if targetBtn then
+            local isActive = false
+            for _, d in ipairs(targetBtn:GetDescendants()) do
+                local dn = d.Name:lower()
+                if (dn:find("active") or dn:find("enabled") or dn:find("green") or dn:find("check") or dn:find("dot")) and d.Visible then
+                    isActive = true
+                    break
+                end
+            end
+
+            if desiredState == nil or isActive ~= desiredState then
+                if type(getconnections) == "function" then
+                    for _, conn in ipairs(getconnections(targetBtn.MouseButton1Click or targetBtn.Activated)) do
+                        conn:Fire()
+                    end
+                end
+                pcall(function()
+                    if type(firesignal) == "function" then
+                        firesignal(targetBtn.MouseButton1Click)
+                        firesignal(targetBtn.Activated)
+                    end
+                end)
+                clicked = true
+            end
+        end
+    end)
+    return clicked
+end
+
+local function ClickNativeAutoFarmGuiButton(desiredState)
+    return ClickNativeSidebarButton({ "AutoFarm", "Auto Farm", "Auto_Farm" }, desiredState)
+end
+
+local function ClickNativeAutoHuntGuiButton(desiredState)
+    return ClickNativeSidebarButton({ "AutoHunt", "Auto Hunt", "Auto_Hunt", "Hunt" }, desiredState)
+end
+
 local function EnableNativeAutoFarm(plot, zonePos)
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
+    -- 1. Bật qua Client AutoFarmCmds
     pcall(function()
-        if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Enable) == "function" then
-            Modules.AutoFarmCmds.Enable()
-        elseif Modules.Network and Modules.Network.Invoke then
+        if Modules.AutoFarmCmds then
+            if type(Modules.AutoFarmCmds.Enable) == "function" then
+                Modules.AutoFarmCmds.Enable()
+            elseif type(Modules.AutoFarmCmds.Set) == "function" then
+                Modules.AutoFarmCmds.Set(true)
+            elseif type(Modules.AutoFarmCmds.Toggle) == "function" then
+                local isEn = type(Modules.AutoFarmCmds.IsEnabled) == "function" and Modules.AutoFarmCmds.IsEnabled()
+                if not isEn then Modules.AutoFarmCmds.Toggle() end
+            end
+        end
+    end)
+    -- 2. Kích hoạt trực tiếp nút GUI "Auto Farm" trên sidebar màn hình (chuẩn theo ảnh dj cung cấp)
+    ClickNativeAutoFarmGuiButton(true)
+    -- 3. Remotes
+    pcall(function()
+        if Modules.Network and Modules.Network.Invoke then
             Modules.Network.Invoke("AutoFarm_Enable", true)
         elseif netFolder and netFolder:FindFirstChild("AutoFarm_Enable") then
             netFolder.AutoFarm_Enable:InvokeServer(true)
+        end
+    end)
+    pcall(function()
+        if Modules.Network and Modules.Network.Fire then
+            Modules.Network.Fire("AutoFarm_Enable", true)
+            Modules.Network.Fire("AutoFarm: Enable", true)
         end
     end)
     if plot and plot.Invoke and NET and NET.SetAutoBreak then
@@ -5152,6 +5136,7 @@ local function EnableNativeAutoFarm(plot, zonePos)
         pcall(function()
             if Modules.Network and Modules.Network.Fire then
                 Modules.Network.Fire("AutoFarm_LogPosition", zonePos)
+                Modules.Network.Fire("AutoFarm: LogPosition", zonePos)
             elseif netFolder and netFolder:FindFirstChild("AutoFarm_LogPosition") then
                 netFolder.AutoFarm_LogPosition:FireServer(zonePos)
             end
@@ -5162,17 +5147,35 @@ end
 
 local function DisableNativeAutoFarm(plot)
     local netFolder = ReplicatedStorage:FindFirstChild("Network")
+    -- 1. Tắt qua Client AutoFarmCmds
     pcall(function()
-        if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Disable) == "function" then
-            Modules.AutoFarmCmds.Disable()
-        elseif Modules.Network and Modules.Network.Invoke then
+        if Modules.AutoFarmCmds then
+            if type(Modules.AutoFarmCmds.Disable) == "function" then
+                Modules.AutoFarmCmds.Disable()
+            elseif type(Modules.AutoFarmCmds.Set) == "function" then
+                Modules.AutoFarmCmds.Set(false)
+            elseif type(Modules.AutoFarmCmds.Toggle) == "function" then
+                local isEn = type(Modules.AutoFarmCmds.IsEnabled) == "function" and Modules.AutoFarmCmds.IsEnabled()
+                if isEn then Modules.AutoFarmCmds.Toggle() end
+            end
+        end
+    end)
+    -- 2. Tắt nút GUI "Auto Farm" trên sidebar màn hình
+    ClickNativeAutoFarmGuiButton(false)
+    -- 3. Remotes
+    pcall(function()
+        if Modules.Network and Modules.Network.Invoke then
             Modules.Network.Invoke("AutoFarm_Disable")
         elseif netFolder and netFolder:FindFirstChild("AutoFarm_Disable") then
             netFolder.AutoFarm_Disable:InvokeServer()
         end
     end)
     pcall(function()
-        if netFolder and netFolder:FindFirstChild("AutoFarm_ForceDisable") then
+        if Modules.Network and Modules.Network.Fire then
+            Modules.Network.Fire("AutoFarm_Disable")
+            Modules.Network.Fire("AutoFarm_Enable", false)
+            Modules.Network.Fire("AutoFarm_ForceDisable")
+        elseif netFolder and netFolder:FindFirstChild("AutoFarm_ForceDisable") then
             netFolder.AutoFarm_ForceDisable:FireServer()
         end
     end)
@@ -5185,13 +5188,16 @@ local function DisableNativeAutoFarm(plot)
 end
 
 local function EnsureNativeAutoHunt(plot)
-    if not plot then return end
-    pcall(function()
-        plot:Invoke(NET.SetHunt, true)
-    end)
-    pcall(function()
-        plot:Invoke(NET.SetHunt, { On = true, Min = 0, Variant = true, UltraOnHuge = true })
-    end)
+    if plot and plot.Invoke and NET and NET.SetHunt then
+        pcall(function()
+            plot:Invoke(NET.SetHunt, true)
+        end)
+        pcall(function()
+            plot:Invoke(NET.SetHunt, { On = true, Min = 0, Variant = true, UltraOnHuge = true })
+        end)
+    end
+    -- Kích hoạt nút GUI Auto Hunt trên sidebar nếu chưa bật
+    ClickNativeAutoHuntGuiButton(true)
 end
 
 local function GetHighestUnlockedFarmPosition(plot)
@@ -5224,7 +5230,7 @@ local function GetHighestUnlockedFarmPosition(plot)
         end
     end
 
-    local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+    local plotModel = GetSafePlotModel(plot)
     local plotPivot = plotModel and plotModel:GetPivot()
     local ib = GetIslandBox(plot)
     if ib and ib.cf then
@@ -5308,7 +5314,7 @@ local function StepWildPets(plot)
             end
 
             -- Chặn tuyệt đối tele lạc về World Spawn: Nếu returnCF ở quá xa đảo (> 250 studs) hoặc cao độ thấp (< 500), dùng tâm đảo
-            local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+            local plotModel = GetSafePlotModel(plot)
             local plotPivot = plotModel and plotModel:GetPivot()
             if plotPivot and returnCF then
                 local distToIsland = (returnCF.Position - plotPivot.Position).Magnitude
@@ -5341,7 +5347,7 @@ local function StepWildPets(plot)
     if totalNets <= 0 then
         EndCatchingSession("Hết lưới trong túi. Chờ Merchant restock")
         -- Đảm bảo nếu nhân vật đang đứng lạc ở khu spawn hoặc dưới thấp, lập tức kéo về bãi farm trên đảo
-        local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+        local plotModel = GetSafePlotModel(plot)
         local plotPivot = plotModel and plotModel:GetPivot()
         if plotPivot and hrp and ((hrp.Position - plotPivot.Position).Magnitude > 150 or hrp.Position.Y < 500) then
             local _, farmCF = GetHighestUnlockedFarmPosition(plot)
@@ -5447,12 +5453,17 @@ local function StepWildPets(plot)
                     end
 
                     -- BỘ LỌC TỌA ĐỘ PET HỢP LỆ TRÊN ĐẢO:
-                    -- Pet phải có tọa độ cụ thể và nằm trên đảo (cao độ > 500 studs, không rơi xuống khu World Spawn)
-                    local plotModel = (plot and plot.GetModel and plot:GetModel()) or (plot and plot:FindFirstChild("Model"))
+                    local plotModel = GetSafePlotModel(plot)
                     local plotPivot = plotModel and plotModel:GetPivot()
+                    if petPos and typeof(petPos) == "Vector3" then
+                        -- Nếu là local offset (Y < 500) thì chuyển sang World Coordinate của đảo
+                        if petPos.Y < 500 and plotPivot then
+                            petPos = plotPivot:PointToWorldSpace(petPos)
+                        end
+                    end
                     local posValid = false
-                    if petPos and typeof(petPos) == "Vector3" and petPos.Y > 500 then
-                        if not plotPivot or (petPos - plotPivot.Position).Magnitude <= 400 then
+                    if petPos and typeof(petPos) == "Vector3" and petPos.Y > 1000 then
+                        if not plotPivot or (petPos - plotPivot.Position).Magnitude <= 350 then
                             posValid = true
                         end
                     end
@@ -6588,8 +6599,14 @@ local function UpdateMiniGui()
             end
             MiniGuiState.HatchLabel.Text = string.format("🥚 Hatched: %s%s • 🦃 Turkey: %s", ShortenNumber(hatched), hatchDetail, tostring(turkeyStatus))
         end
+        local petNets, ultraNets = 0, 0
+        if type(GetAvailablePetNets) == "function" then
+            pcall(function()
+                petNets, ultraNets = GetAvailablePetNets(plot)
+            end)
+        end
         if MiniGuiState.PhaseLabel then
-            MiniGuiState.PhaseLabel.Text = string.format("🐾 Wild Pets: %s • 🕸️ Nets: Auto", ShortenNumber(wildCaught))
+            MiniGuiState.PhaseLabel.Text = string.format("🐾 Wild Pets: %s • 🕸️ Nets: %d (%d Ultra)", ShortenNumber(wildCaught), petNets, ultraNets)
         end
         if MiniGuiState.MailLabel then
             MiniGuiState.MailLabel.Text = string.format("🎁 Gifts: %s • 📦 Mail: %s", ShortenNumber(gifts), tostring(MailState and MailState.Status or "Rảnh"))
