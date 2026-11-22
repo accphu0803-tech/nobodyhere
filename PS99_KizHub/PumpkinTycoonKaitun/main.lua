@@ -5088,103 +5088,41 @@ local function ClickNativeSidebarButton(buttonKeywords, desiredState)
     return clicked
 end
 
-local function ClickNativeAutoFarmGuiButton(desiredState)
-    return ClickNativeSidebarButton({ "AutoFarm", "Auto Farm", "Auto_Farm" }, desiredState)
-end
-
 local function ClickNativeAutoHuntGuiButton(desiredState)
     return ClickNativeSidebarButton({ "AutoHunt", "Auto Hunt", "Auto_Hunt", "Hunt" }, desiredState)
 end
 
-local function EnableNativeAutoFarm(plot, zonePos)
-    local netFolder = ReplicatedStorage:FindFirstChild("Network")
-    -- 1. Bật qua Client AutoFarmCmds
-    pcall(function()
-        if Modules.AutoFarmCmds then
-            if type(Modules.AutoFarmCmds.Enable) == "function" then
-                Modules.AutoFarmCmds.Enable()
-            elseif type(Modules.AutoFarmCmds.Set) == "function" then
-                Modules.AutoFarmCmds.Set(true)
-            elseif type(Modules.AutoFarmCmds.Toggle) == "function" then
-                local isEn = type(Modules.AutoFarmCmds.IsEnabled) == "function" and Modules.AutoFarmCmds.IsEnabled()
-                if not isEn then Modules.AutoFarmCmds.Toggle() end
-            end
-        end
-    end)
-    -- 2. Kích hoạt trực tiếp nút GUI "Auto Farm" trên sidebar màn hình (chuẩn theo ảnh dj cung cấp)
-    ClickNativeAutoFarmGuiButton(true)
-    -- 3. Remotes
-    pcall(function()
-        if Modules.Network and Modules.Network.Invoke then
-            Modules.Network.Invoke("AutoFarm_Enable", true)
-        elseif netFolder and netFolder:FindFirstChild("AutoFarm_Enable") then
-            netFolder.AutoFarm_Enable:InvokeServer(true)
-        end
-    end)
-    pcall(function()
-        if Modules.Network and Modules.Network.Fire then
-            Modules.Network.Fire("AutoFarm_Enable", true)
-            Modules.Network.Fire("AutoFarm: Enable", true)
-        end
-    end)
-    if plot and plot.Invoke and NET and NET.SetAutoBreak then
-        pcall(function()
-            plot:Invoke(NET.SetAutoBreak, true)
-        end)
-    end
-    if zonePos then
-        pcall(function()
-            if Modules.Network and Modules.Network.Fire then
-                Modules.Network.Fire("AutoFarm_LogPosition", zonePos)
-                Modules.Network.Fire("AutoFarm: LogPosition", zonePos)
-            elseif netFolder and netFolder:FindFirstChild("AutoFarm_LogPosition") then
-                netFolder.AutoFarm_LogPosition:FireServer(zonePos)
-            end
-        end)
-    end
-    WildPetsState.NativeAutoFarmActive = true
-end
-
-local function DisableNativeAutoFarm(plot)
-    local netFolder = ReplicatedStorage:FindFirstChild("Network")
-    -- 1. Tắt qua Client AutoFarmCmds
+-- Theo chỉ đạo của dj: Tuyệt đối KHÔNG gọi/bật Native Auto Farm để tránh xung đột khiến breakables không vỡ!
+local function DisableNativeAutoFarm()
     pcall(function()
         if Modules.AutoFarmCmds then
             if type(Modules.AutoFarmCmds.Disable) == "function" then
                 Modules.AutoFarmCmds.Disable()
             elseif type(Modules.AutoFarmCmds.Set) == "function" then
                 Modules.AutoFarmCmds.Set(false)
-            elseif type(Modules.AutoFarmCmds.Toggle) == "function" then
-                local isEn = type(Modules.AutoFarmCmds.IsEnabled) == "function" and Modules.AutoFarmCmds.IsEnabled()
-                if isEn then Modules.AutoFarmCmds.Toggle() end
             end
         end
     end)
-    -- 2. Tắt nút GUI "Auto Farm" trên sidebar màn hình
-    ClickNativeAutoFarmGuiButton(false)
-    -- 3. Remotes
+    pcall(function()
+        ClickNativeSidebarButton({ "AutoFarm", "Auto Farm", "Auto_Farm" }, false)
+    end)
     pcall(function()
         if Modules.Network and Modules.Network.Invoke then
             Modules.Network.Invoke("AutoFarm_Disable")
-        elseif netFolder and netFolder:FindFirstChild("AutoFarm_Disable") then
-            netFolder.AutoFarm_Disable:InvokeServer()
         end
     end)
     pcall(function()
         if Modules.Network and Modules.Network.Fire then
             Modules.Network.Fire("AutoFarm_Disable")
             Modules.Network.Fire("AutoFarm_Enable", false)
-            Modules.Network.Fire("AutoFarm_ForceDisable")
-        elseif netFolder and netFolder:FindFirstChild("AutoFarm_ForceDisable") then
-            netFolder.AutoFarm_ForceDisable:FireServer()
         end
     end)
-    if plot and plot.Invoke and NET and NET.SetAutoBreak then
-        pcall(function()
-            plot:Invoke(NET.SetAutoBreak, false)
-        end)
-    end
     WildPetsState.NativeAutoFarmActive = false
+end
+
+local function EnableNativeAutoFarm()
+    -- Vô hiệu hóa hoàn toàn theo lệnh của dj: Không gọi pet Auto Farm, để bình thường để breakables vỡ chuẩn xác!
+    return
 end
 
 local function EnsureNativeAutoHunt(plot)
@@ -5329,10 +5267,8 @@ local function StepWildPets(plot)
                 task.wait(0.2)
             end
 
-            -- THEO CHỈ ĐẠO CỦA DJ: Catch pet xong thì tele về bãi và TẮT AUTO FARM đi!
-            -- Vì nếu để bật, khi mở bãi mới (ví dụ từ bãi 5 sang bãi 6) pet sẽ kẹt ở bãi cũ.
-            DisableNativeAutoFarm(plot)
-            Log("INFO", "🎯 [WildPets] Đã TẮT Auto Farm của game để đàn pet tự do chuyển bãi khi mở khu mới!")
+            -- THEO CHỈ ĐẠO CỦA DJ: Không gọi pet Auto Farm, giữ Auto Farm tắt hoàn toàn để breakables vỡ bình thường!
+            DisableNativeAutoFarm()
 
             WildPetsState.SavedFarmCF = nil
             WildPetsState.HighestZonePos = nil
@@ -5547,8 +5483,8 @@ local function StepWildPets(plot)
     -- =========================================================================
     -- THEO ĐÚNG CHỈ ĐẠO CỦA DJ:
     -- Bật auto hunt của game để bắt.
-    -- Tele đến zone farm sau đó bật auto farm (cơ chế của game).
-    -- Sau đó tele đến chỗ spawn hoặc chỗ có pet cho cơ chế game tự catch pet.
+    -- Tuyệt đối KHÔNG gọi/bật Auto Farm của game để đàn pet farm bình thường, tránh lỗi breakables không vỡ.
+    -- Tele đến chỗ pet cho cơ chế game tự catch pet.
     -- =========================================================================
     if not WildPetsState.IsCatchingSession then
         Runtime.State.ActiveTask = "CATCHING_PETS"
@@ -5559,11 +5495,7 @@ local function StepWildPets(plot)
         WildPetsState.SavedFarmCF = farmCF
         WildPetsState.HighestZonePos = farmPos
 
-        -- 2. Bật Auto Farm (cơ chế game) trực tiếp như bật Auto Hunt (theo lệnh dj: không gọi pet thủ công!)
-        EnableNativeAutoFarm(plot, farmPos)
-        Log("INFO", "🎯 [WildPets] Đã bật Auto Farm của game để đàn pet tự giữ farm bãi hiện tại!")
-
-        -- 3. Bật Auto Hunt của game
+        -- 2. Bật Auto Hunt của game để cơ chế game tự động bắt (không gọi Auto Farm)
         EnsureNativeAutoHunt(plot)
         Log("INFO", "🎯 [WildPets] Đã bật Auto Hunt của game để cơ chế game tự động bắt!")
 
