@@ -3336,90 +3336,9 @@ local function StepConsumableBoosts()
 end
 
 local lastCocoaCheck = 0
-local function -- StepHotCocoaStand(plot, buttons, part1Complete) -- Bỏ qua theo lệnh dj
+local function StepHotCocoaStand(plot, buttons, part1Complete)
     -- Bỏ qua Hot Cocoa Stand hoàn toàn theo lệnh dj
     return
-    if not Modules.PumpkinButtonsUtil or not Modules.PumpkinButtonsUtil.Owned(buttons, Modules.PumpkinCocoaUtil.BUTTON) then
-        return
-    end
-    if os.clock() - lastCocoaCheck < 1.5 then
-        return
-    end
-    lastCocoaCheck = os.clock()
-
-    if os.clock() - (Runtime.Cache.LastCocoaFailAt or 0) < 15 then
-        return
-    end
-
-    if Config.CocoaRequireButtonsComplete and not part1Complete then
-        return
-    end
-
-    local coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
-    Runtime.Stats.Coins = coins
-    local activateCoins = tonumber(Config.CocoaActivateCoins) or 0
-    local spareCoins = tonumber(Config.CocoaMinSpareCoins) or 0
-    if coins < activateCoins then
-        return
-    end
-
-    local tier = Modules.PumpkinCocoaUtil.TIER or 1
-    local costPerMin = Modules.PumpkinCocoaUtil.CostPerMinute and Modules.PumpkinCocoaUtil.CostPerMinute(tier)
-    if type(costPerMin) ~= "number" or costPerMin <= 0 then
-        return
-    end
-
-    local maintainSec = (tonumber(Config.CocoaMaintainMinutes) or 2) * 60
-    local stepMin = math.max(1, math.floor(tonumber(Config.CocoaBuyStepMinutes) or 2))
-    local tankSec = (Modules.PumpkinCocoaUtil.TankSeconds and Modules.PumpkinCocoaUtil.TankSeconds()) or (720 * 60)
-
-    local pending = {}
-    local simCoins = coins
-    for _, axis in ipairs(Config.CocoaAxes or {}) do
-        if simCoins < activateCoins then
-            break
-        end
-        local boostId = Modules.PumpkinBoostsUtil.Id(axis, tier)
-        local validOffer = (not Modules.PumpkinCocoaUtil.Offer) or (Modules.PumpkinCocoaUtil.Offer(boostId) ~= nil)
-        if validOffer then
-            local remaining = GetBoostTimerSeconds(boostId)
-            if remaining < maintainSec then
-                local needMin = math.max(1, math.ceil((maintainSec - remaining) / 60))
-                local maxTankMin = math.floor(math.max(0, tankSec - remaining) / 60)
-                local affordableMin = math.floor(math.max(0, simCoins - spareCoins) / costPerMin)
-                local buyMin = math.min(stepMin, needMin, maxTankMin, affordableMin)
-                if buyMin >= 1 then
-                    table.insert(pending, { boostId = boostId, buyMin = buyMin })
-                    simCoins = simCoins - (buyMin * costPerMin)
-                end
-            end
-        end
-    end
-    if #pending == 0 then
-        return
-    end
-
-    WithMachinePad(plot, Modules.PumpkinCocoaUtil.MACHINE, Modules.PumpkinCocoaUtil.Range, function()
-        for _, req in ipairs(pending) do
-            if not IsRunning() then
-                break
-            end
-            local ok, res, reason = pcall(function()
-                return plot:Invoke(NET.CocoaBuyTime, req.boostId, req.buyMin)
-            end)
-            if ok and res == true then
-                Runtime.Cache.LastCocoaFailAt = 0
-                coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
-                Runtime.Stats.Coins = coins
-                Log("INFO", "Bought %dm Cocoa [%s] (%s Coins/min)", req.buyMin, tostring(req.boostId), tostring(costPerMin))
-                task.wait(0.05)
-            else
-                Runtime.Cache.LastCocoaFailAt = os.clock()
-                Log("DEBUG", "Cocoa buy failed [%s x%dm]: %s", tostring(req.boostId), req.buyMin, tostring(reason or res))
-                break
-            end
-        end
-    end)
 end
 
 local function BuildGiftPositions(amount)
@@ -6622,7 +6541,7 @@ local function StartLoops()
                 StepKeepLockAndStock(plot, buttons, part1Complete)
                 StepUpgrades(plot, buttons)
                 StepConsumableBoosts()
-                StepHotCocoaStand(plot, buttons, part1Complete)
+                -- StepHotCocoaStand(plot, buttons, part1Complete) -- Bỏ qua theo lệnh dj
                 StepPetSpeedBuff()
                 StepMapOptimizer(plot)
                 StepOpenFlannelGifts()
