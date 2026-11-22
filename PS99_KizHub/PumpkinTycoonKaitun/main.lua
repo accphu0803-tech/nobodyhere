@@ -172,7 +172,8 @@ local DEFAULT_CONFIG = {
     WildMinTier = "Any",               -- "Any" (0), "Uncommon+" (1), "Rare+" (2), "Epic+" (3), "Huges only" (4)
     WildVariantsOnly = false,          -- Only catch Golden / Rainbow / Shiny wild pets
     WildUltraOnHugesOnly = true,       -- Reserve Ultra Pet Nets (x5 catch chance) for Huge/Sightings only
-    AutoHuntWild = true,               -- Auto synchronize Hunt configuration (LF_Pursue) and patrol spawn zones
+    AutoHuntWild = false,              -- [NO-TELE]: Tắt tuần tra Hunt của game để nhân vật không bị kéo khỏi bãi farm
+    WildRemoteOnly = true,             -- Đứng yên ném lưới từ xa (RU_Ensnare), tuyệt đối không tele/di chuyển nhân vật đi bắt pet
     AutoCatchSightings = true,         -- Priority Catch Rare Sightings (Huge Gobble Husky, Titanic Maple Turkey, Gargantuan Pumpkin Dragon)
     AutoBuyNets = true,                -- Auto buy Pet Nets / restock nets when low (< 5)
     AutoFightTurkey = true,            -- Auto launch cannon (TC_Launch), enter Turkey Boss arena & attack boss
@@ -3229,8 +3230,10 @@ local function StepOpenFlannelGifts()
 end
 
 -- ============================================================================
--- 11. EGG HATCHER (SMART EARLY BOOTSTRAP + POST-COMPLETION ZONE 5 EGG)
+-- 11. EGG HATCHER (TRIỆT TIÊU HOÀN TOÀN HOẠT ẢNH TRỨNG & POPUP HIỆN PET)
 -- ============================================================================
+local EggAnimationHookInstalled = false
+
 local function SuppressEggAnimation()
     if not Config.HatchDisableAnimation then
         return
@@ -3241,20 +3244,119 @@ local function SuppressEggAnimation()
             Modules.Variables.OpeningEgg = 0
             Modules.Variables.MessageOpen = false
         end
-        if Modules.EggCmds and type(Modules.EggCmds.PlayAnimation) == "function" then
-            Modules.EggCmds.PlayAnimation = function() end
+
+        -- A. Hook Modules EggCmds & CustomEggsCmds (Triệt tiêu mọi hàm gọi Animation/Reveal/Display)
+        if Modules.EggCmds then
+            for k, v in pairs(Modules.EggCmds) do
+                if type(v) == "function" then
+                    local lk = string.lower(k)
+                    if (lk:find("anim") or lk:find("display") or lk:find("reveal") or lk:find("open")) and
+                       not (lk:find("isunlocked") or lk:find("getmax") or lk:find("isegg") or lk:find("price")) then
+                        Modules.EggCmds[k] = function() return end
+                    end
+                end
+            end
         end
-        if Modules.CustomEggsCmds and type(Modules.CustomEggsCmds.PlayAnimation) == "function" then
-            Modules.CustomEggsCmds.PlayAnimation = function() end
+        if Modules.CustomEggsCmds then
+            for k, v in pairs(Modules.CustomEggsCmds) do
+                if type(v) == "function" then
+                    local lk = string.lower(k)
+                    if lk:find("anim") or lk:find("display") or lk:find("reveal") then
+                        Modules.CustomEggsCmds[k] = function() return end
+                    end
+                end
+            end
         end
-        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+
+        -- B. Hook PlayerScripts: "Egg Opening Frontend" qua getsenv (Triệt tiêu hoạt ảnh hiển thị Pet vừa mở)
+        if type(getsenv) == "function" then
+            local ps = LocalPlayer and (LocalPlayer:FindFirstChildOfClass("PlayerScripts") or LocalPlayer:FindFirstChild("PlayerScripts"))
+            local scripts = ps and ps:FindFirstChild("Scripts")
+            local gameFolder = scripts and scripts:FindFirstChild("Game")
+            local eggScript = gameFolder and (gameFolder:FindFirstChild("Egg Opening Frontend") or gameFolder:FindFirstChild("EggOpeningFrontend"))
+            if eggScript then
+                local env = getsenv(eggScript)
+                if type(env) == "table" then
+                    local targets = {
+                        "PlayEggAnimation", "PlayAnimation", "Display", "DisplayPet",
+                        "DisplayPets", "Reveal", "Open", "Show", "Start", "TapToOpen"
+                    }
+                    for _, fnName in ipairs(targets) do
+                        if type(env[fnName]) == "function" then
+                            env[fnName] = function() return end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- C. Triệt tiêu toàn bộ Popup hiện Pet và ScreenGui mở trứng trong PlayerGui
+        local playerGui = LocalPlayer and (LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:FindFirstChild("PlayerGui"))
         if playerGui then
-            for _, guiName in ipairs({ "EggOpening", "CustomEggOpening", "EggAnimation", "EggOpeningFrontend" }) do
+            local targetGuis = {
+                "EggOpenAnimation", "EggOpening", "CustomEggOpening", "EggAnimation",
+                "EggOpeningFrontend", "EggHatch", "Hatch", "PetReveal", "Eggs", "CustomEggs"
+            }
+            for _, guiName in ipairs(targetGuis) do
                 local g = playerGui:FindFirstChild(guiName)
                 if g and g:IsA("ScreenGui") then
                     g.Enabled = false
+                    for _, d in ipairs(g:GetDescendants()) do
+                        if d:IsA("GuiObject") then
+                            d.Visible = false
+                        end
+                    end
                 end
             end
+            -- Quét tổng thể toàn bộ ScreenGui có từ khóa egg/hatch/reveal (ngoại trừ KizHub MiniGui)
+            for _, child in ipairs(playerGui:GetChildren()) do
+                if child:IsA("ScreenGui") then
+                    local lName = string.lower(child.Name)
+                    if (lName:find("egg") or lName:find("hatch") or lName:find("reveal")) and not lName:find("kiz") then
+                        child.Enabled = false
+                        for _, d in ipairs(child:GetDescendants()) do
+                            if d:IsA("GuiObject") then
+                                d.Visible = false
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- D. Xóa sạch các Model Pet/Egg hiển thị tạm thời trong Camera
+        local cam = Workspace.CurrentCamera
+        if cam then
+            for _, child in ipairs(cam:GetChildren()) do
+                local lName = string.lower(child.Name)
+                if lName:find("egg") or lName:find("pet") or lName:find("reveal") or lName:find("viewport") then
+                    pcall(function() child:Destroy() end)
+                end
+            end
+        end
+
+        -- E. Cài đặt Listener tự động dập tắt ngay lập tức khi PlayerGui tạo Popup mới
+        if not EggAnimationHookInstalled and playerGui then
+            EggAnimationHookInstalled = true
+            playerGui.ChildAdded:Connect(function(child)
+                if not Config.HatchDisableAnimation then return end
+                if child:IsA("ScreenGui") then
+                    local lName = string.lower(child.Name)
+                    if (lName:find("egg") or lName:find("hatch") or lName:find("reveal")) and not lName:find("kiz") then
+                        task.defer(function()
+                            child.Enabled = false
+                            for _, d in ipairs(child:GetDescendants()) do
+                                if d:IsA("GuiObject") then d.Visible = false end
+                            end
+                        end)
+                        child:GetPropertyChangedSignal("Enabled"):Connect(function()
+                            if child.Enabled and Config.HatchDisableAnimation then
+                                child.Enabled = false
+                            end
+                        end)
+                    end
+                end
+            end)
         end
     end)
 end
@@ -4562,19 +4664,9 @@ local function StepWildPets(plot)
             netType = "Ultra Pet Net"
         end
 
-        -- Legit mode: walk near physical pet before throwing
-        if Config.LegitMode and PT_Wild and PT_Wild.Physical then
-            pcall(function()
-                local phys = PT_Wild.Physical(bestSlot)
-                if phys and phys:IsA("Model") then
-                    MoveNear(phys:GetPivot().Position, 12)
-                    task.wait(0.15)
-                end
-            end)
-        end
-
+        -- Đứng yên ném lưới từ xa (TUYỆT ĐỐI KHÔNG TELEPORT / KHÔNG DI CHUYỂN NHÂN VẬT)
+        -- Remote NET.CatchWild ("RU_Ensnare") gọi trực tiếp qua plot:Invoke với slot pet từ xa
         local okThrow = pcall(function()
-            -- Invoke directly via plot:Invoke(NET.CatchWild) to avoid client animation interrupts ("Failed to catch the nil")
             return plot:Invoke(NET.CatchWild, bestSlot, netType)
         end)
         if okThrow then
@@ -4583,12 +4675,12 @@ local function StepWildPets(plot)
         end
     end
 
-    -- 3. Auto sync Hunt config (every 60s)
-    if Config.AutoHuntWild and (now - WildPetsState.LastHuntSyncAt) > 60 then
+    -- 3. Auto sync Hunt config (TẮT tuần tra của game để nhân vật không bị kéo khỏi bãi farm)
+    if (now - WildPetsState.LastHuntSyncAt) > 60 then
         WildPetsState.LastHuntSyncAt = now
         pcall(function()
             plot:Invoke(NET.SetHunt, {
-                On = true,
+                On = (Config.AutoHuntWild == true), -- Mặc định false: không bao giờ để game tự động kéo nhân vật chạy tuần tra
                 Min = minTier,
                 Variant = Config.WildVariantsOnly == true,
                 UltraOnHuge = Config.WildUltraOnHugesOnly == true,
