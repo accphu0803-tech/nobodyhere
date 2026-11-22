@@ -64,13 +64,27 @@ local DEFAULT_CONFIG = {
     MerchantActivateCoins = 100000, -- Có 100k Coins là mua ngay
     MerchantMinSpareCoins = 50000,  -- Giữ 50k Coins dự phòng
     KeepServerAutoMerchantOff = true,
-    MerchantBandOrder = { "ExoticPlus", "MythicalPlus", "LegendaryPlus", "EpicPlus", "RarePlus" },
+    AutoBuyNetsMerchant = true,     -- Tự động mua lưới (Pet Net / Ultra Pet Net) tại Pet Net Store Merchant
+    PetNetStoreInterval = 10,       -- Giãn cách kiểm tra mua lưới tại PetNetStore (giây)
+    MerchantBandOrder = {
+        "SecretPlus", "DivinePlus", "ExoticPlus", "MythicalPlus", "LegendaryPlus", "EpicPlus", "RarePlus",
+        "Secret", "Divine", "Exotic", "Mythical", "Legendary", "Epic", "Rare"
+    },
     AllowedMerchantBands = {
+        SecretPlus = true,
+        DivinePlus = true,
         ExoticPlus = true,
         MythicalPlus = true,
         LegendaryPlus = true,
         EpicPlus = true,
         RarePlus = true,
+        Secret = true,
+        Divine = true,
+        Exotic = true,
+        Mythical = true,
+        Legendary = true,
+        Epic = true,
+        Rare = true,
     },
 
     -- Free Gifts (12 Mốc Quà Miễn Phí Tích Lũy Gems)
@@ -2035,10 +2049,14 @@ local function StepKeepLockAndStock(plot, buttons, part1Complete)
             for _, bandKey in ipairs(stockList) do
                 counts[bandKey] = (counts[bandKey] or 0) + 1
             end
-            local bands = Modules.MerchantTypes.BANDS or {}
+            -- Danh sách thứ tự độ hiếm khi cắm bí ngô lên bệ: Secret > Divine > Exotic > Mythical...
+            local priorityBands = {
+                "SecretPlus", "Secret", "DivinePlus", "Divine",
+                "ExoticPlus", "Exotic", "MythicalPlus", "Mythical",
+                "LegendaryPlus", "Legendary", "EpicPlus", "Epic", "RarePlus", "Rare"
+            }
             local emptyCursor = 1
-            for idx = #bands, 1, -1 do
-                local bandKey = bands[idx]
+            for _, bandKey in ipairs(priorityBands) do
                 while (counts[bandKey] or 0) > 0 and emptyCursor <= #pedInfo.emptyIndices do
                     local emptyPedIdx = pedInfo.emptyIndices[emptyCursor]
                     local ok, res = pcall(function()
@@ -2141,12 +2159,43 @@ local function StepKeepLockAndStock(plot, buttons, part1Complete)
     end
 
     WithMachinePad(plot, Modules.MerchantTypes.MACHINE, Modules.MerchantTypes.Range, function()
+        -- A. Quét ưu tiên tuyệt đối mua 2 trái Bí Ngô mới: Secret và Divine
+        for itemKey, avail in pairs(merchantClean.Items) do
+            local lk = tostring(itemKey):lower()
+            if (lk:find("secret") or lk:find("divine")) and avail > 0 and stockCount < maxSlots then
+                local okBuy, resBuy = pcall(function()
+                    return plot:Invoke(NET.BuyBand, itemKey)
+                end)
+                if okBuy and resBuy == true then
+                    stockCount = stockCount + 1
+                    merchantClean.Items[itemKey] = avail - 1
+                    coins = GetCurrency((PT and PT.COIN) or "PumpkinTycoonCoins")
+                    Runtime.Stats.Coins = coins
+                    Log("INFO", "🔥 [PumpkinMerchant] ĐÃ MUA THÀNH CÔNG BÍ NGÔ CAO CẤP: %s!", tostring(itemKey))
+                    task.wait(0.05)
+                end
+            end
+        end
+
+        -- B. Quét mua theo danh mục cấu hình MerchantBandOrder
         for _, bandKey in ipairs(Config.MerchantBandOrder or {}) do
             if Config.AllowedMerchantBands[bandKey] == true then
                 local avail = merchantClean.Items[bandKey] or 0
                 local bandCfg = bandConfigs and bandConfigs[bandKey]
                 local price = bandCfg and bandCfg.Price
-                while IsRunning() and avail > 0 and stockCount < maxSlots and price and coins >= activateCoins and (coins - price) >= spareCoins do
+                if not price then
+                    local lk = tostring(bandKey):lower()
+                    if lk:find("secret") then
+                        price = 50000000000
+                    elseif lk:find("divine") then
+                        price = 25000000000
+                    elseif lk:find("exotic") then
+                        price = 14000000000
+                    else
+                        price = 100000
+                    end
+                end
+                while IsRunning() and avail > 0 and stockCount < maxSlots and coins >= activateCoins and (coins - price) >= spareCoins do
                     local ok, res, reason = pcall(function()
                         return plot:Invoke(NET.BuyBand, bandKey)
                     end)
@@ -2845,20 +2894,44 @@ local function GetTrackNextInfo(trackKey)
         return nil
     end
     local tier = 0
-    if Modules.EventUpgradeCmds and Modules.EventUpgradeCmds.GetTier then
+    -- Thử lấy tier qua client module PT_Upgrades (hỗ trợ Part 2)
+    if PT_Upgrades and PT_Upgrades.Tier then
+        local okU, tU = pcall(PT_Upgrades.Tier, trackKey)
+        if okU and type(tU) == "number" then
+            tier = tU
+        end
+    end
+    if tier == 0 and Modules.EventUpgradeCmds and Modules.EventUpgradeCmds.GetTier then
         local ok, t = pcall(Modules.EventUpgradeCmds.GetTier, Modules.UpgradesTypes.Id(trackKey))
         if ok and type(t) == "number" then
             tier = t
         end
     end
-    local maxTier = #row.Powers
+
+    -- Kiểm tra trạng thái đã max level (Capped)
+    if PT_Upgrades and PT_Upgrades.Capped then
+        local okC, isCap = pcall(PT_Upgrades.Capped, trackKey)
+        if okC and isCap == true then
+            return nil
+        end
+    end
+
+    local maxTier = (row.Powers and #row.Powers) or (row.Costs and #row.Costs) or 16
     if tier >= maxTier then
         return nil
     end
-    local baseCost = row.Costs[tier + 1]
+
+    local baseCost = row.Costs and row.Costs[tier + 1]
+    if not baseCost and PT_Upgrades and PT_Upgrades.Cost then
+        local okCost, c = pcall(PT_Upgrades.Cost, trackKey)
+        if okCost and type(c) == "number" then
+            baseCost = c
+        end
+    end
     if not baseCost then
         return nil
     end
+
     local liveCost = math.max(1, math.ceil(baseCost * GetUpgradeCostMult()))
     return { track = trackKey, nextTier = tier + 1, baseCost = baseCost, cost = liveCost }
 end
@@ -4879,6 +4952,74 @@ local function StepWildPets(plot)
 end
 
 -- ============================================================================
+-- 11E. PET NET STORE MERCHANT ENGINE (TỰ ĐỘNG MUA LƯỚI TẠI PET NET STORE)
+-- ============================================================================
+local lastPetNetStoreCheck = 0
+local function StepPetNetMerchant(plot)
+    if not Config.AutoBuyNetsMerchant or not plot then return end
+    local now = os.clock()
+    local interval = tonumber(Config.PetNetStoreInterval) or 10
+    if (now - lastPetNetStoreCheck) < interval then return end
+    lastPetNetStoreCheck = now
+
+    pcall(function()
+        -- 1. Tiếp cận máy PetNetStore nếu cần thiết (Machine Approached)
+        if Modules.Network and Modules.Network.Fire then
+            pcall(function()
+                Modules.Network.Fire("Machines: Mark Approached", "PetNetStore")
+            end)
+        end
+
+        -- 2. Đảm bảo cờ Restock Auto Nets (GN_Restock) luôn BẬT trên Plot Tycoon
+        pcall(function()
+            plot:Invoke(NET.SetAutoNets, true)
+        end)
+
+        -- 3. Gọi Remote Tycoon mua trực tiếp lưới từ Net Store trên đảo (NET.BuyNet = "ZK_Barter")
+        pcall(function()
+            -- Mua Pet Net thường
+            plot:Invoke(NET.BuyNet, "Pet Net", 5)
+            plot:Invoke(NET.BuyNet, 1, 5)
+            -- Mua Ultra Pet Net
+            plot:Invoke(NET.BuyNet, "Ultra Pet Net", 2)
+            plot:Invoke(NET.BuyNet, 2, 2)
+        end)
+
+        -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
+        local offers = nil
+        if Modules.Network and Modules.Network.Invoke then
+            local okO, resO = pcall(Modules.Network.Invoke, "Merchant_GetOffers", "PetNetStore")
+            if okO and type(resO) == "table" then offers = resO end
+        elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_GetOffers") then
+            local okO, resO = pcall(function() return RS.Network.Merchant_GetOffers:InvokeServer("PetNetStore") end)
+            if okO and type(resO) == "table" then offers = resO end
+        end
+
+        if type(offers) == "table" then
+            for slotKey, offer in pairs(offers) do
+                local slotNum = tonumber(slotKey)
+                if slotNum and type(offer) == "table" then
+                    local inStock = (offer.Stock == nil) or (tonumber(offer.Stock) or 0) > 0
+                    if inStock then
+                        local bought = false
+                        if Modules.Network and Modules.Network.Invoke then
+                            local okB, resB = pcall(Modules.Network.Invoke, "Merchant_RequestPurchase", "PetNetStore", slotNum)
+                            if okB and resB ~= false then bought = true end
+                        elseif RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Merchant_RequestPurchase") then
+                            local okB, resB = pcall(function() return RS.Network.Merchant_RequestPurchase:InvokeServer("PetNetStore", slotNum) end)
+                            if okB and resB ~= false then bought = true end
+                        end
+                        if bought then
+                            Log("INFO", "🛒 [PetNetStore] Đã tự động mua lưới từ Merchant Slot #%d (%s)!", slotNum, tostring(offer.Item or "Net"))
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- ============================================================================
 -- 11D. TURKEY BOSS FIGHT & REBIRTH SHRINE ENGINE (PART 2)
 -- ============================================================================
 local TurkeyBossState = {
@@ -5922,6 +6063,7 @@ local function StartLoops()
                 StepFreeGifts()
                 StepClaimMail()
                 StepAutoBuffs()
+                StepPetNetMerchant(plot)
             end)
             if not ok then
                 Log("DEBUG", "Manager loop error: %s", tostring(err))
