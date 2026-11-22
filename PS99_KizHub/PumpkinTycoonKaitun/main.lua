@@ -125,19 +125,19 @@ local DEFAULT_CONFIG = {
     AutoOpenGifts = true,
     GiftBatchAmount = 8,            -- Server clamp [1, 8]
 
-    -- Egg Hatching (Smart Early Bootstrap + Post-Buttons Zone 5)
+    -- Egg Hatching (Chu kỳ mở 3 lần -> Tích tiền mua nút -> Lặp lại đến egg cuối mở Infinite)
     AutoHatch = true,
-    AutoEarlyHatchForDamage = true, -- Hatch unlocked eggs during rush when slots < MaxPetsEquipped or power < egg common pet
-    EarlyHatchMaxPerEgg = 3,        -- Cap early bootstrap hatches (mở 3 lần mỗi bậc trứng để lấy pet rồi tích tiền mua nút tiếp theo)
-    EarlyHatchReserveCoins = true,  -- Temporarily reserve 1x egg cost during early bootstrap before buying buttons
-    AutoEquipBestPets = true,       -- Ensure AutoEquipPets / EquipBest equips newly hatched stronger pets immediately
-    TargetEggName = "Best",             -- "Best" (highest unlocked egg) or specific egg name ("Zone8_Egg", "Golden Grove Egg", etc.)
-    FallbackHighestUnlockedEgg = true,  -- If specified egg not unlocked yet, automatically fallback to highest unlocked egg
+    AutoEarlyHatchForDamage = true, -- Tự động mở trứng trong chu kỳ
+    EarlyHatchMaxPerEgg = 3,        -- Chu kỳ: Mở đúng 3 lần mỗi đợt -> Dừng hatch để dồn tiền mua button tiếp theo -> Mua xong lại mở tiếp 3 lần
+    EarlyHatchReserveCoins = true,  -- Giữ tiền đủ 1 lượt mở trong lúc đang mở chu kỳ 3 lần
+    AutoEquipBestPets = true,       -- Luôn trang bị pet mạnh nhất ngay sau khi mở trứng
+    TargetEggName = "Best",             -- "Best" (trứng cao nhất đã mở) hoặc tên cụ thể ("Zone8_Egg", "Golden Ridge Egg", v.v.)
+    FallbackHighestUnlockedEgg = true,  -- Tự động fallback về trứng cao nhất nếu trứng chỉ định chưa mở
     HatchDisableAnimation = true,
-    HatchMinBatchMultiplier = 1,    -- Start hatching when Coins >= cost * maxBatch * mult (or >= cost * 1)
-    HatchMoveMaxDist = 28,          -- [STAND-EGG]: Giu khoang cach toi da 28 studs tu egg (chi dinh vi lai neu bi day qua xa)
-    HatchStandDistance = 20,        -- [STAND-EGG]: Dung cach qua trung 20 studs (tang them 5 stud) truc dien mat truoc
-    HatchFrontOffsetSign = -1,      -- [STAND-EGG]: -1 dao nguoc LookVector de dung mat truoc (tranh bi tele ra sau lung egg)
+    HatchMinBatchMultiplier = 1,    -- Bắt đầu mở khi Coins >= giá trứng * 1
+    HatchMoveMaxDist = 28,          -- [STAND-EGG]: Giữ khoảng cách tối đa 28 studs từ egg
+    HatchStandDistance = 20,        -- [STAND-EGG]: Đứng cách quả trứng 20 studs (đã tăng thêm 5 stud) trực diện mặt trước
+    HatchFrontOffsetSign = -1,      -- [STAND-EGG]: -1 đảo ngược LookVector để đứng trước mặt egg (không bị ra sau lưng)
     HatchCooldown = 0.05,
 
     -- Pet Crafting (Gold & Rainbow Machine)
@@ -295,6 +295,7 @@ local Runtime = {
         EggBasePowerCache = {},
         EarlyHatchedByEgg = {},
         EarlyHatchedTimesByEgg = {},
+        CurrentCycleHatchCount = 0,
         ReserveEarlyEggCost = 0,
         LastEquipBestAt = 0,
         TeamPowerSnapshot = nil,
@@ -2769,7 +2770,8 @@ local function StepButtonsAndComplete(plot)
             break
         end
         boughtThisPass = boughtThisPass + 1
-        Log("INFO", "Bought Button [%s] (%s) for %s Coins", pick.btn.Id, tostring(pick.btn.Display), tostring(pick.price))
+        Runtime.Cache.CurrentCycleHatchCount = 0 -- Reset chu kỳ: sau khi mua nút thì mở tiếp 3 lần
+        Log("INFO", "Bought Button [%s] (%s) for %s Coins -> Reset chu kỳ, chuẩn bị mở tiếp 3 lần", pick.btn.Id, tostring(pick.btn.Display), tostring(pick.price))
         buttons, part1Complete, claimedComplete = GetProgressState(plot)
         coins = Runtime.Stats.Coins
         if EvaluateEarlyBootstrap and not isFinalStage then
@@ -3091,10 +3093,7 @@ local function BuildGiftPositions(amount)
     end
 
     local char, hrp = GetCharacter()
-    if not hrp then
-        return nil
-    end
-    local center = hrp.Position
+    local center = hrp and hrp.Position or Vector3.new(0, 10, 0)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = char and { char } or {}
@@ -3117,7 +3116,6 @@ local function StepOpenFlannelGifts()
     if not Config.AutoOpenGifts or not Modules.Network then
         return
     end
-    -- PumpkinTycoonGiftOpener gate removed (client does not set attribute)
     if os.clock() - lastGiftAttempt < 0.25 then
         return
     end
@@ -3125,7 +3123,33 @@ local function StepOpenFlannelGifts()
     local giftName = (Modules.ButtonsTypes and Modules.ButtonsTypes.COMPLETION_GIFT) or "Flannel Gift"
     local giftUid, giftAmt = nil, 0
 
-    if Modules.LootboxItem then
+    -- 1. Quét tìm trực tiếp trong Save.Inventory.Lootbox (Túi đồ -> Mục Lootbox / Quà tặng)
+    if Modules.Save and Modules.Save.Get then
+        pcall(function()
+            local inv = Modules.Save.Get().Inventory
+            if type(inv) ~= "table" then return end
+            local containers = { inv.Lootbox, inv.Gift, inv.Box, inv.Lootboxes, inv.Misc }
+            for _, boxContainer in ipairs(containers) do
+                if type(boxContainer) == "table" then
+                    for uid, d in pairs(boxContainer) do
+                        if type(d) == "table" then
+                            local boxId = tostring(d.id or d._id or d.Name or "")
+                            if string.find(string.lower(boxId), "flannel") then
+                                giftUid = tostring(uid or d._uid or d.uid or "")
+                                giftName = boxId
+                                giftAmt = tonumber(d._am or d.amount or d.Count) or 1
+                                break
+                            end
+                        end
+                    end
+                end
+                if giftUid then break end
+            end
+        end)
+    end
+
+    -- 2. Fallback quét qua Modules.LootboxItem
+    if not giftUid and Modules.LootboxItem then
         pcall(function()
             local list = Modules.LootboxItem(giftName):FindAny()
             local first = list and list[1]
@@ -3136,37 +3160,70 @@ local function StepOpenFlannelGifts()
         end)
     end
 
-    if not giftUid and Modules.Save and Modules.Save.Get then
-        pcall(function()
-            local inv = Modules.Save.Get().Inventory
-            local boxes = inv and inv.Lootbox
-            if type(boxes) == "table" then
-                for uid, d in pairs(boxes) do
-                    if type(d) == "table" and (d.id == giftName or d._id == giftName) then
-                        giftUid = tostring(uid)
-                        giftAmt = tonumber(d._am) or 1
-                        break
-                    end
-                end
-            end
-        end)
-    end
-
     if not giftUid or giftAmt < 1 then
         return
     end
 
     local count = math.clamp(math.floor(math.min(giftAmt, Config.GiftBatchAmount or 8)), 1, 8)
-    local positions = BuildGiftPositions(count)
-    if not positions then
-        return
-    end
+    local positions = BuildGiftPositions(count) or {}
 
     lastGiftAttempt = os.clock()
-    local ok, res = pcall(Modules.Network.Invoke, NET.GiftOpen, giftUid, count, positions)
-    if ok and res == true then
+    local opened = false
+
+    -- Phương thức A: Remote sự kiện Tycoon (NET.GiftOpen = "YR_Hydrate")
+    local ok1, res1 = pcall(function()
+        local plot = GetMyPlot()
+        if plot and plot.Invoke then
+            return plot:Invoke(NET.GiftOpen, giftUid, count, positions)
+        else
+            return Modules.Network.Invoke(NET.GiftOpen, giftUid, count, positions)
+        end
+    end)
+    if ok1 and res1 == true then
+        opened = true
+    end
+
+    -- Phương thức B: Remote Lootbox tiêu chuẩn PS99 từ mục Lootboxes ("Lootbox: Open") với giftName
+    if not opened then
+        local ok2, res2 = pcall(function()
+            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+        end)
+        if ok2 and res2 ~= false then
+            opened = true
+        end
+    end
+
+    -- Phương thức C: Remote Lootbox tiêu chuẩn PS99 với giftUid
+    if not opened and giftUid then
+        local ok3, res3 = pcall(function()
+            return Modules.Network.Invoke("Lootbox: Open", giftUid, count)
+        end)
+        if ok3 and res3 ~= false then
+            opened = true
+        end
+    end
+
+    -- Phương thức D: Fire remotes
+    if not opened then
+        pcall(function()
+            Modules.Network.Fire("Lootbox: Open", giftName, count)
+        end)
+        if giftUid then
+            pcall(function()
+                Modules.Network.Fire("Lootbox: Open", giftUid, count)
+            end)
+        end
+    end
+
+    -- Phương thức E: Client LootboxCmds
+    if not opened and Modules.LootboxCmds and Modules.LootboxCmds.Open then
+        pcall(Modules.LootboxCmds.Open, giftName, count)
+        pcall(Modules.LootboxCmds.Open, giftUid, count)
+    end
+
+    if opened then
         Runtime.Stats.GiftsOpened = Runtime.Stats.GiftsOpened + count
-        Log("INFO", "Opened %dx %s (Total: %d)", count, giftName, Runtime.Stats.GiftsOpened)
+        Log("INFO", "🎁 Opened %dx %s from Lootboxes! (Total: %d)", count, giftName, Runtime.Stats.GiftsOpened)
         pcall(CheckNewHugeWatcher)
     end
 end
@@ -3604,16 +3661,16 @@ EvaluateEarlyBootstrap = function(plot, buttons)
     end
 
     local maxTimes = math.max(1, math.floor(tonumber(Config.EarlyHatchMaxPerEgg) or 3))
-    local timesHatched = Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0
-    if timesHatched >= maxTimes then
-        -- Đã mở đủ 3 lần trên bậc trứng này! Dừng hatch để tích tiền mua button tiếp theo!
+    local cycleHatched = Runtime.Cache.CurrentCycleHatchCount or 0
+    if cycleHatched >= maxTimes then
+        -- Đã mở đủ 3 lần trong chu kỳ hiện tại! Dừng hatch để tích tiền mua button tiếp theo!
         Runtime.Cache.ReserveEarlyEggCost = 0
         return false
     end
 
     local eggCost = GetEggPrice(eggName)
     Runtime.Cache.ReserveEarlyEggCost = (Config.EarlyHatchReserveCoins ~= false) and eggCost or 0
-    local remainingTimes = maxTimes - timesHatched
+    local remainingTimes = maxTimes - cycleHatched
     return true, eggUid, eggName, eggPos, eggMax, eggCost, remainingTimes, eggCF
 end
 
@@ -3681,7 +3738,7 @@ local function StepHatch(plot, buttons, part1Complete)
     end
 
     Runtime.Stats.IsHatching = true
-    Runtime.Stats.Phase = (isEarly and string.format("Early Hatch %s (%d/3)", eggName, (Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0) + 1)
+    Runtime.Stats.Phase = (isEarly and string.format("Cycle Hatch %s (%d/3)", eggName, (Runtime.Cache.CurrentCycleHatchCount or 0) + 1)
         or ("Infinite Hatch " .. eggName))
     SuppressEggAnimation()
 
@@ -3728,15 +3785,16 @@ local function StepHatch(plot, buttons, part1Complete)
         pcall(CheckNewHugeWatcher)
         if isEarly then
             Runtime.Stats.EarlyEggsHatched = Runtime.Stats.EarlyEggsHatched + batch
+            Runtime.Cache.CurrentCycleHatchCount = (Runtime.Cache.CurrentCycleHatchCount or 0) + 1
             Runtime.Cache.EarlyHatchedTimesByEgg[eggName] = (Runtime.Cache.EarlyHatchedTimesByEgg[eggName] or 0) + 1
             Runtime.Cache.EarlyHatchedByEgg[eggName] = (Runtime.Cache.EarlyHatchedByEgg[eggName] or 0) + batch
             Runtime.Cache.TeamPowerSnapshotAt = 0
             GetTeamPowerSnapshot(true)
-            local currentTimes = Runtime.Cache.EarlyHatchedTimesByEgg[eggName]
+            local currentCycle = Runtime.Cache.CurrentCycleHatchCount
             local maxTimes = Config.EarlyHatchMaxPerEgg or 3
-            Log("INFO", "Early-hatched %dx [%s] (Lần mở %d/%d)%s",
-                batch, eggName, currentTimes, maxTimes,
-                (currentTimes >= maxTimes) and " -> Đã đủ 3 lần! Dừng hatch để tích tiền mua button tiếp theo!" or "")
+            Log("INFO", "Cycle-hatched %dx [%s] (Chu kỳ: Lần %d/%d)%s",
+                batch, eggName, currentCycle, maxTimes,
+                (currentCycle >= maxTimes) and " -> Đã mở đủ 3 lần chu kỳ! Tạm dừng hatch để dồn tiền mua button tiếp theo!" or "")
             EnsureBestPetsEquipped(true)
             task.delay(0.15, function()
                 if IsRunning() then
@@ -5103,8 +5161,10 @@ local function StepAutoBuffs()
     if not Config.AutoBuffs or not Config.AutoBuffs.Enabled or not Modules.Network then return end
     local now = os.clock()
 
-    -- A. Fruits: Ăn tối đa 20 quả/lần mỗi 120s
-    if Config.AutoBuffs.Fruits and now - lastFruitCheck >= 120 then
+    -- TUYỆT ĐỐI KHÔNG CẮM CỜ HOẶC SỬ DỤNG BẤT KỲ LOẠI CỜ NÀO (STRICT NO FLAGS GUARANTEE)
+
+    -- A. Fruits: Ăn tối đa 20 quả/lần mỗi 60s (Damage, Coins, Diamond, Rainbow Fruit...)
+    if Config.AutoBuffs.Fruits and now - lastFruitCheck >= 60 then
         lastFruitCheck = now
         pcall(function()
             if not Modules.Save or not Modules.Save.Get then return end
@@ -5113,11 +5173,17 @@ local function StepAutoBuffs()
             if type(fruits) == "table" then
                 for _, item in pairs(fruits) do
                     if type(item) == "table" and type(item.id) == "string" then
-                        local amt = tonumber(item._am) or 0
-                        if amt > 0 then
-                            local eatAmt = math.clamp(amt, 1, 20)
-                            pcall(Modules.Network.Fire, "Fruits: Consume", item.id, eatAmt)
-                            task.wait(0.06)
+                        local lowerId = string.lower(item.id)
+                        if not lowerId:find("flag") then
+                            local amt = tonumber(item._am) or 0
+                            if amt > 0 then
+                                local eatAmt = math.clamp(amt, 1, 20)
+                                local ok = pcall(Modules.Network.Fire, "Fruits: Consume", item.id, eatAmt)
+                                if ok then
+                                    Log("DEBUG", "Auto-consumed %dx Fruit [%s]", eatAmt, item.id)
+                                end
+                                task.wait(0.06)
+                            end
                         end
                     end
                 end
@@ -5125,8 +5191,8 @@ local function StepAutoBuffs()
         end)
     end
 
-    -- B. Potions: Tự cắn Potions tăng Damage, Coins, Luck mỗi 180s
-    if Config.AutoBuffs.Potions and now - lastPotionCheck >= 180 then
+    -- B. Potions: Tự cắn Potions tăng Damage, Coins, Luck, Speed mỗi 60s (TUYỆT ĐỐI KHÔNG DÙNG CỜ)
+    if Config.AutoBuffs.Potions and now - lastPotionCheck >= 60 then
         lastPotionCheck = now
         pcall(function()
             if not Modules.Save or not Modules.Save.Get then return end
@@ -5137,16 +5203,22 @@ local function StepAutoBuffs()
                 for _, item in pairs(potions) do
                     if type(item) == "table" and type(item.id) == "string" then
                         local lowerId = string.lower(item.id)
-                        local matched = false
-                        for _, kw in ipairs(targetTypes) do
-                            if lowerId:find(kw) then
-                                matched = true
-                                break
+                        -- Chặn tuyệt đối nếu có bất kỳ chữ "flag" nào
+                        if not lowerId:find("flag") then
+                            local matched = false
+                            for _, kw in ipairs(targetTypes) do
+                                if lowerId:find(kw) then
+                                    matched = true
+                                    break
+                                end
                             end
-                        end
-                        if matched and (tonumber(item._am) or 0) > 0 then
-                            pcall(Modules.Network.Fire, "Potions: Consume", item.id)
-                            task.wait(0.06)
+                            if matched and (tonumber(item._am) or 0) > 0 then
+                                local ok = pcall(Modules.Network.Fire, "Potions: Consume", item.id)
+                                if ok then
+                                    Log("DEBUG", "Auto-consumed Potion [%s]", item.id)
+                                end
+                                task.wait(0.06)
+                            end
                         end
                     end
                 end
@@ -5154,8 +5226,8 @@ local function StepAutoBuffs()
         end)
     end
 
-    -- C. Toys: Dùng Toys từ Inventory.Misc mỗi 300s
-    if Config.AutoBuffs.Toys and now - lastToyCheck >= 300 then
+    -- C. Toys: Dùng Toys từ Inventory.Misc mỗi 120s (TUYỆT ĐỐI KHÔNG DÙNG CỜ)
+    if Config.AutoBuffs.Toys and now - lastToyCheck >= 120 then
         lastToyCheck = now
         pcall(function()
             if not Modules.Save or not Modules.Save.Get then return end
@@ -5164,19 +5236,23 @@ local function StepAutoBuffs()
             if type(misc) == "table" then
                 for uid, item in pairs(misc) do
                     if type(item) == "table" and type(item.id) == "string" then
-                        local toyUid = item._uid or uid
-                        if item.id == "Toy Ball" then
-                            pcall(Modules.Network.Invoke, "ToyBall_Consume", toyUid)
-                            task.wait(0.12)
-                        elseif item.id == "Toy Bone" then
-                            pcall(Modules.Network.Invoke, "ToyBone_Consume", toyUid)
-                            task.wait(0.12)
-                        elseif item.id == "Squeaky Toy" then
-                            pcall(Modules.Network.Invoke, "SqueakyToy_Consume", toyUid)
-                            task.wait(0.12)
-                        elseif item.id:lower():find("toy") then
-                            pcall(Modules.Network.Invoke, "Consumables_Consume", toyUid)
-                            task.wait(0.12)
+                        local lowerId = string.lower(item.id)
+                        -- Chặn tuyệt đối mọi vật phẩm liên quan cờ
+                        if not lowerId:find("flag") then
+                            local toyUid = item._uid or uid
+                            if item.id == "Toy Ball" then
+                                pcall(Modules.Network.Invoke, "ToyBall_Consume", toyUid)
+                                task.wait(0.12)
+                            elseif item.id == "Toy Bone" then
+                                pcall(Modules.Network.Invoke, "ToyBone_Consume", toyUid)
+                                task.wait(0.12)
+                            elseif item.id == "Squeaky Toy" then
+                                pcall(Modules.Network.Invoke, "SqueakyToy_Consume", toyUid)
+                                task.wait(0.12)
+                            elseif lowerId:find("toy") then
+                                pcall(Modules.Network.Invoke, "Consumables_Consume", toyUid)
+                                task.wait(0.12)
+                            end
                         end
                     end
                 end
@@ -5246,7 +5322,20 @@ local function UpdateMiniGui()
             end
         end
         if MiniGuiState.HatchLabel then
-            MiniGuiState.HatchLabel.Text = string.format("🥚 Hatched: %s • 🦃 Turkey: %s", ShortenNumber(hatched), tostring(turkeyStatus))
+            local hatchDetail = ""
+            if Runtime and Runtime.Stats and Runtime.Stats.IsHatching then
+                hatchDetail = string.format(" (%d/3)", math.min(3, (Runtime.Cache.CurrentCycleHatchCount or 0) + 1))
+            elseif Runtime and Runtime.Stats and Runtime.Stats.NextButtonName == "Đã xong tất cả" then
+                hatchDetail = " (Inf)"
+            else
+                local cycle = (Runtime and Runtime.Cache and Runtime.Cache.CurrentCycleHatchCount) or 0
+                if cycle >= 3 then
+                    hatchDetail = " (Chờ nút)"
+                else
+                    hatchDetail = string.format(" (%d/3)", cycle)
+                end
+            end
+            MiniGuiState.HatchLabel.Text = string.format("🥚 Hatched: %s%s • 🦃 Turkey: %s", ShortenNumber(hatched), hatchDetail, tostring(turkeyStatus))
         end
         if MiniGuiState.PhaseLabel then
             MiniGuiState.PhaseLabel.Text = string.format("🐾 Wild Pets: %s • 🕸️ Nets: Auto", ShortenNumber(wildCaught))
