@@ -135,8 +135,9 @@ local DEFAULT_CONFIG = {
     FallbackHighestUnlockedEgg = true,  -- If specified egg not unlocked yet, automatically fallback to highest unlocked egg
     HatchDisableAnimation = true,
     HatchMinBatchMultiplier = 1,    -- Start hatching when Coins >= cost * maxBatch * mult (or >= cost * 1)
-    HatchMoveMaxDist = 18,          -- [STAND-EGG]: Giu khoang cach toi da 18 studs tu egg (chi dinh vi lai neu bi day qua xa)
-    HatchStandDistance = 10,        -- [STAND-EGG]: Dung cach qua trung 10 studs truc dien mat truoc de hatch muot va farm bai
+    HatchMoveMaxDist = 24,          -- [STAND-EGG]: Giu khoang cach toi da 24 studs tu egg (chi dinh vi lai neu bi day qua xa)
+    HatchStandDistance = 15,        -- [STAND-EGG]: Dung cach qua trung 15 studs (tang them 5 stud) truc dien mat truoc
+    HatchFrontOffsetSign = -1,      -- [STAND-EGG]: -1 dao nguoc LookVector de dung mat truoc (tranh bi tele ra sau lung egg)
     HatchCooldown = 0.05,
 
     -- Pet Crafting (Gold & Rainbow Machine)
@@ -3155,6 +3156,21 @@ local function SuppressEggAnimation()
             Modules.Variables.OpeningEgg = 0
             Modules.Variables.MessageOpen = false
         end
+        if Modules.EggCmds and type(Modules.EggCmds.PlayAnimation) == "function" then
+            Modules.EggCmds.PlayAnimation = function() end
+        end
+        if Modules.CustomEggsCmds and type(Modules.CustomEggsCmds.PlayAnimation) == "function" then
+            Modules.CustomEggsCmds.PlayAnimation = function() end
+        end
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if playerGui then
+            for _, guiName in ipairs({ "EggOpening", "CustomEggOpening", "EggAnimation", "EggOpeningFrontend" }) do
+                local g = playerGui:FindFirstChild(guiName)
+                if g and g:IsA("ScreenGui") then
+                    g.Enabled = false
+                end
+            end
+        end
     end)
 end
 
@@ -3625,14 +3641,15 @@ local function StepHatch(plot, buttons, part1Complete)
 
     Runtime.Cache.HatchInFlight = true
     local _, hrp = GetCharacter()
-    local maxDist = Config.HatchMoveMaxDist or 18
-    local standDist = Config.HatchStandDistance or 10
+    local maxDist = Config.HatchMoveMaxDist or 24
+    local standDist = Config.HatchStandDistance or 15
     if hrp and HorizontalDist(hrp.Position, eggPos) > maxDist then
         if not IsMoveLocked() then
             local standPos
+            local sign = Config.HatchFrontOffsetSign or -1
             if typeof(eggCF) == "CFrame" and eggCF.LookVector.Magnitude > 0.5 then
-                -- Stand 10 studs directly in front of the egg pedestal facing it
-                standPos = eggCF.Position + (eggCF.LookVector * standDist) + Vector3.new(0, 1.5, 0)
+                -- Dung truc dien mat truoc qua trung (sign = -1 dao nguoc LookVector neu bệ quay nguoc)
+                standPos = eggCF.Position + (eggCF.LookVector * (standDist * sign)) + Vector3.new(0, 1.5, 0)
             else
                 local plotModel = plot and plot.GetModel and plot:GetModel()
                 local centerPos = plotModel and plotModel:GetPivot().Position or (eggPos + Vector3.new(0, 0, 50))
