@@ -434,6 +434,7 @@ local Modules = {
     CustomEggsCmds = SafeRequire(Library, "Client", "CustomEggsCmds"),
     EggCmds = SafeRequire(Library, "Client", "EggCmds"),
     EventUpgradeCmds = SafeRequire(Library, "Client", "EventUpgradeCmds"),
+    LootboxCmds = SafeRequire(Library, "Client", "LootboxCmds"),
     LootboxLocation = SafeRequire(Library, "Client", "LootboxCmds", "LocationFinder"),
     Directory = SafeRequire(Library, "Directory"),
     Items = SafeRequire(Library, "Items"),
@@ -2514,10 +2515,11 @@ local function CollectMyBreakables(plot, pedInfo)
                 if isBonus then
                     score = 1000000 - (dist * 0.25)
                 elseif type(pedIdx) == "number" then
-                    score = (Config.BreakAllPumpkins and 200000 or 50000) + (rung * 1000) - (dist * 0.25)
+                    -- Trái bí ngô trên bệ Pedestal: Tránh cướp mục tiêu của bãi farm khu vực
+                    score = (Config.BreakAllPumpkins and 20000 or 1000) + (rung * 100) - (dist * 0.25)
                 else
-                    -- Highest unlocked Zone dominates distance penalty across the whole island
-                    score = 5000 + (zoneNum * 2000) - (dist * 0.25)
+                    -- Bãi farm khu vực (Zone 1 - Zone 8): Ưu tiên tuyệt đối để cày tiền và token mở rộng
+                    score = 30000 + (zoneNum * 5000) - (dist * 0.25)
                 end
                 local entry = {
                     uid = tostring(uid),
@@ -3080,23 +3082,46 @@ local function GetUpgradeCostMult()
 end
 
 local function GetTrackNextInfo(trackKey)
-    local row = Modules.UpgradesTypes and Modules.UpgradesTypes.ROWS and Modules.UpgradesTypes.ROWS[trackKey]
-    if not row or not Modules.UpgradesTypes.Id then
-        return nil
+    local fullUpgradeId = "PumpkinTycoon" .. trackKey
+    if Modules.UpgradesTypes and Modules.UpgradesTypes.Id then
+        local okId, idRes = pcall(Modules.UpgradesTypes.Id, trackKey)
+        if okId and idRes then
+            fullUpgradeId = idRes
+        end
     end
+
     local tier = 0
-    -- Thử lấy tier qua client module PT_Upgrades (hỗ trợ Part 2)
+    -- 1. Thử lấy tier qua client module PT_Upgrades (hỗ trợ Part 2)
     if PT_Upgrades and PT_Upgrades.Tier then
         local okU, tU = pcall(PT_Upgrades.Tier, trackKey)
         if okU and type(tU) == "number" then
             tier = tU
         end
     end
+    -- 2. Thử qua EventUpgradeCmds
     if tier == 0 and Modules.EventUpgradeCmds and Modules.EventUpgradeCmds.GetTier then
-        local ok, t = pcall(Modules.EventUpgradeCmds.GetTier, Modules.UpgradesTypes.Id(trackKey))
+        local ok, t = pcall(Modules.EventUpgradeCmds.GetTier, fullUpgradeId)
         if ok and type(t) == "number" then
             tier = t
         end
+        if tier == 0 then
+            local ok2, t2 = pcall(Modules.EventUpgradeCmds.GetTier, trackKey)
+            if ok2 and type(t2) == "number" then
+                tier = t2
+            end
+        end
+    end
+    -- 3. Thử qua Save.Get().EventUpgrades
+    if tier == 0 and Modules.Save and Modules.Save.Get then
+        pcall(function()
+            local s = Modules.Save.Get()
+            if s and type(s.EventUpgrades) == "table" then
+                tier = s.EventUpgrades[fullUpgradeId] or s.EventUpgrades[trackKey] or 0
+                if type(tier) == "table" then
+                    tier = tier.Tier or tier.tier or tier._tier or tier[1] or 0
+                end
+            end
+        end)
     end
 
     -- Kiểm tra trạng thái đã max level (Capped)
@@ -3107,24 +3132,39 @@ local function GetTrackNextInfo(trackKey)
         end
     end
 
-    local maxTier = (row.Powers and #row.Powers) or (row.Costs and #row.Costs) or 16
+    local row = Modules.UpgradesTypes and Modules.UpgradesTypes.ROWS and (Modules.UpgradesTypes.ROWS[trackKey] or Modules.UpgradesTypes.ROWS[fullUpgradeId])
+    local maxTier = (row and row.Powers and #row.Powers) or (row and row.Costs and #row.Costs) or 16
     if tier >= maxTier then
         return nil
     end
 
-    local baseCost = row.Costs and row.Costs[tier + 1]
+    local baseCost = row and row.Costs and row.Costs[tier + 1]
     if not baseCost and PT_Upgrades and PT_Upgrades.Cost then
         local okCost, c = pcall(PT_Upgrades.Cost, trackKey)
         if okCost and type(c) == "number" then
             baseCost = c
         end
     end
+    if not baseCost and ReplicatedStorage:FindFirstChild("__DIRECTORY") then
+        pcall(function()
+            local evDir = ReplicatedStorage.__DIRECTORY:FindFirstChild("EventUpgrades")
+            local ptDir = evDir and evDir:FindFirstChild("Event") and evDir.Event:FindFirstChild("PumpkinTycoon")
+            local mod = ptDir and (ptDir:FindFirstChild(fullUpgradeId) or ptDir:FindFirstChild(trackKey))
+            if mod and mod:IsA("ModuleScript") then
+                local def = require(mod)
+                if def and def.TierCosts and def.TierCosts[tier + 1] then
+                    local tc = def.TierCosts[tier + 1]
+                    baseCost = (tc._data and tc._data._am) or (type(tc.GetAmount) == "function" and tc:GetAmount()) or tc._am or tc.amount
+                end
+            end
+        end)
+    end
     if not baseCost then
-        return nil
+        baseCost = (tier + 1) * 10
     end
 
     local liveCost = math.max(1, math.ceil(baseCost * GetUpgradeCostMult()))
-    return { track = trackKey, nextTier = tier + 1, baseCost = baseCost, cost = liveCost }
+    return { track = trackKey, fullId = fullUpgradeId, nextTier = tier + 1, baseCost = baseCost, cost = liveCost }
 end
 
 local function GetCheapestAffordableUpgrade(currentTokens)
@@ -3132,8 +3172,8 @@ local function GetCheapestAffordableUpgrade(currentTokens)
         return nil
     end
     local tracks = Config.UpgradePriority or {
-        "MoreTokens", "FasterBreak", "DamageBonus", "LuckBonus",
-        "MoreCoins", "Walkspeed", "DiamondBonus", "PetSpeed"
+        "SpawnLuck", "PumpkinCoins", "PumpkinDamage", "RespawnSpeed",
+        "StockSlots", "ChaseOdds", "EggLuck", "MerchantLuck"
     }
     local candidates = {}
     for _, trackKey in ipairs(tracks) do
@@ -3154,15 +3194,18 @@ local function GetCheapestAffordableUpgrade(currentTokens)
 end
 
 local function StepUpgrades(plot, buttons)
-    if not Config.AutoUpgrades or not plot or not Modules.UpgradesTypes then
+    if not Config.AutoUpgrades or not plot then
         return
     end
-    -- Chuẩn dj: Nếu đang làm tác vụ độc quyền khác (như đánh Boss), không xen ngang!
     if Runtime.State and Runtime.State.FightingTurkey then
         return
     end
+    -- Chống spam liên tục khi thất bại hoặc đang trong cooldown (Triệt tiêu hiện tượng "tele loạn"!)
+    if os.clock() < (Runtime.Cache.LastUpgradeAttempt or 0) then
+        return
+    end
 
-    local machineButton = Modules.UpgradesTypes.BUTTON or "UpgradeMachine"
+    local machineButton = (Modules.UpgradesTypes and Modules.UpgradesTypes.BUTTON) or "UpgradeMachine"
     local isOwned = false
     if Modules.PumpkinButtonsUtil and Modules.PumpkinButtonsUtil.Owned and buttons then
         local okOwn, owned = pcall(Modules.PumpkinButtonsUtil.Owned, buttons, machineButton)
@@ -3186,17 +3229,18 @@ local function StepUpgrades(plot, buttons)
         return
     end
 
-    -- THEO CHỈ ĐẠO CỦA DJ: Cheaper First!
+    -- Cheaper First: Luôn ưu tiên nâng cấp rẻ nhất để tối ưu sức mạnh
     local cheapest = GetCheapestAffordableUpgrade(tokens)
     if not cheapest then
         return
     end
 
-    -- THEO CHỈ ĐẠO CỦA DJ: Khi tele mua upd thì không được làm gì nữa, đợi mua xong rồi catch sau!
     Runtime.State.ActiveTask = "UPGRADING"
     AcquireMoveLock(35)
 
     WithMachinePad(plot, "UpgradeMachine", 80, function()
+        task.wait(0.15) -- Chờ bệ pad kích hoạt và UI nâng cấp hiển thị
+
         local maxBuys = 30
         for _ = 1, maxBuys do
             if not IsRunning() then
@@ -3211,90 +3255,129 @@ local function StepUpgrades(plot, buttons)
             end
 
             local trackKey = selected.track
-            local fullUpgradeId = (Modules.UpgradesTypes.Id and Modules.UpgradesTypes.Id(trackKey)) or ("PumpkinTycoon" .. trackKey)
+            local fullUpgradeId = selected.fullId or ("PumpkinTycoon" .. trackKey)
+            local tokensBefore = tokens
             local bought = false
 
             -- 1. Thử qua plot:Invoke(NET.UpgradeBuy, trackKey)
-            local okPlot, resPlot = pcall(function()
-                return plot:Invoke(NET.UpgradeBuy, trackKey)
+            pcall(function()
+                local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey)
+                if r == true or type(r) == "table" then bought = true end
             end)
-            if okPlot and resPlot ~= false and resPlot ~= nil then
-                bought = true
-            end
 
             -- 2. Thử qua plot:Invoke(NET.UpgradeBuy, fullUpgradeId)
             if not bought then
-                local okPlot2, resPlot2 = pcall(function()
-                    return plot:Invoke(NET.UpgradeBuy, fullUpgradeId)
+                pcall(function()
+                    local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", fullUpgradeId)
+                    if r == true or type(r) == "table" then bought = true end
                 end)
-                if okPlot2 and resPlot2 ~= false and resPlot2 ~= nil then
-                    bought = true
-                end
             end
 
-            -- 3. Thử qua Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
-            if not bought and Modules.Network and Modules.Network.Invoke then
-                local okNet, resNet = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", fullUpgradeId)
-                if okNet and resNet ~= false and resNet ~= nil then
-                    bought = true
-                end
-                if not bought then
-                    local okNetB, resNetB = pcall(Modules.Network.Invoke, "EventUpgrades: Purchase", trackKey)
-                    if okNetB and resNetB ~= false and resNetB ~= nil then
-                        bought = true
+            -- 3. Thử qua plot:Invoke(NET.UpgradeBuy, trackKey, nextTier)
+            if not bought then
+                pcall(function()
+                    local r = plot:Invoke(NET.UpgradeBuy or "OQ_Advance", trackKey, selected.nextTier)
+                    if r == true or type(r) == "table" then bought = true end
+                end)
+            end
+
+            -- 4. Thử qua EventUpgradeCmds.Purchase / Buy
+            if not bought and Modules.EventUpgradeCmds then
+                pcall(function()
+                    if type(Modules.EventUpgradeCmds.Purchase) == "function" then
+                        local r = Modules.EventUpgradeCmds.Purchase(fullUpgradeId)
+                        if r == true then bought = true end
                     end
+                    if not bought and type(Modules.EventUpgradeCmds.Buy) == "function" then
+                        local r = Modules.EventUpgradeCmds.Buy(fullUpgradeId)
+                        if r == true then bought = true end
+                    end
+                end)
+            end
+
+            -- 5. Thử qua Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+            if not bought and Modules.Network and Modules.Network.Invoke then
+                pcall(function()
+                    local r = Modules.Network.Invoke("EventUpgrades: Purchase", fullUpgradeId)
+                    if r == true then bought = true end
+                end)
+                if not bought then
+                    pcall(function()
+                        local r = Modules.Network.Invoke("EventUpgrades: Purchase", trackKey)
+                        if r == true then bought = true end
+                    end)
                 end
             end
 
-            -- 4. Thử trực tiếp qua ReplicatedStorage.Network["EventUpgrades: Purchase"]
+            -- 6. Thử trực tiếp qua ReplicatedStorage.Network["EventUpgrades: Purchase"]
             local netFolder = ReplicatedStorage:FindFirstChild("Network")
             if not bought and netFolder then
                 local rEvUp = netFolder:FindFirstChild("EventUpgrades: Purchase")
                 if rEvUp and rEvUp:IsA("RemoteFunction") then
-                    local okRf, resRf = pcall(function()
-                        return rEvUp:InvokeServer(fullUpgradeId)
+                    pcall(function()
+                        local r = rEvUp:InvokeServer(fullUpgradeId)
+                        if r == true then bought = true end
                     end)
-                    if okRf and resRf ~= false and resRf ~= nil then
-                        bought = true
-                    end
                     if not bought then
-                        local okRf2, resRf2 = pcall(function()
-                            return rEvUp:InvokeServer(trackKey)
+                        pcall(function()
+                            local r = rEvUp:InvokeServer(trackKey)
+                            if r == true then bought = true end
                         end)
-                        if okRf2 and resRf2 ~= false and resRf2 ~= nil then
-                            bought = true
-                        end
                     end
                 end
             end
 
-            -- 5. Fallback qua Upgrades_Purchase
-            if not bought and Modules.Network and Modules.Network.Invoke then
-                local okUp, resUp = pcall(Modules.Network.Invoke, "Upgrades_Purchase", fullUpgradeId)
-                if okUp and resUp ~= false and resUp ~= nil then
-                    bought = true
-                end
+            -- 7. Kích hoạt trực tiếp Button mua trong PlayerGui nếu UI đang mở
+            if not bought then
+                pcall(function()
+                    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+                    if not pGui then return end
+                    for _, g in ipairs(pGui:GetChildren()) do
+                        if g:IsA("ScreenGui") and g.Enabled then
+                            local gn = g.Name:lower()
+                            if gn:find("upgrade") or gn:find("tycoon") or gn:find("machine") then
+                                for _, btn in ipairs(g:GetDescendants()) do
+                                    if btn:IsA("GuiButton") and btn.Visible then
+                                        local bn = btn.Name:lower()
+                                        local pn = (btn.Parent and btn.Parent.Name:lower()) or ""
+                                        local matches = (trackKey and (bn:find(trackKey:lower()) or pn:find(trackKey:lower())))
+                                            or (fullUpgradeId and (bn:find(fullUpgradeId:lower()) or pn:find(fullUpgradeId:lower())))
+                                        local isBuy = bn:find("buy") or bn:find("upgrade") or bn:find("purchase")
+                                        if isBuy or matches then
+                                            if type(getconnections) == "function" then
+                                                for _, conn in ipairs(getconnections(btn.MouseButton1Click or btn.Activated)) do
+                                                    conn:Fire()
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+
+            task.wait(0.12)
+            local tokensAfter = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
+            if tokensAfter < tokensBefore then
+                bought = true
             end
 
             if bought then
-                Runtime.Stats.Tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens")
-                Log("INFO", "🎯 [Upgrade Machine] Đã mua nâng cấp rẻ nhất [%s] (%s) lên Tier %d (tốn %s Tokens)",
-                    trackKey, fullUpgradeId, selected.nextTier, tostring(selected.cost))
+                Runtime.Stats.Tokens = tokensAfter
+                Log("INFO", "🎯 [Upgrade Machine] Đã mua thành công [%s] (%s) lên Tier %d",
+                    trackKey, fullUpgradeId, selected.nextTier)
                 task.wait(0.1)
             else
+                -- Mua không thành công: Thiết lập cooldown 10s để không spam và không tele loạn!
+                Runtime.Cache.LastUpgradeAttempt = os.clock() + 10.0
                 break
             end
         end
     end)
 
-    -- Mua xong, tele nhân vật về bãi farm cao nhất và mở khóa tác vụ
-    local _, farmCF = GetHighestUnlockedFarmPosition(plot)
-    local _, hrp = GetCharacter()
-    if hrp and farmCF then
-        hrp.CFrame = farmCF
-        task.wait(0.15)
-    end
-
+    -- WithMachinePad đã tự động đưa nhân vật trở lại vị trí bãi farm ban đầu! Không tele đè farmCF!
     ReleaseMoveLock()
     Runtime.State.ActiveTask = "FARMING"
 end
@@ -3502,7 +3585,28 @@ local function StepOpenFlannelGifts()
 
     -- Phương thức 0: LootboxCmds.Open từ Library Client
     if not opened and Modules.LootboxCmds and type(Modules.LootboxCmds.Open) == "function" then
-        local realObj = (Modules.LootboxCmds.Get and Modules.LootboxCmds.Get(giftUid)) or { class = "Lootbox", data = { id = giftName }, uid = giftUid }
+        local realObj = nil
+        pcall(function()
+            if Modules.LootboxCmds.Get then
+                realObj = Modules.LootboxCmds.Get(giftUid)
+            end
+        end)
+        if not realObj and Modules.LootboxItem then
+            pcall(function()
+                local list = Modules.LootboxItem("Flannel Gift"):FindAny()
+                if list then
+                    if type(list.GetUID) == "function" then
+                        realObj = list
+                    elseif type(list) == "table" and list[1] then
+                        realObj = list[1]
+                    end
+                end
+            end)
+        end
+        if not realObj then
+            realObj = { class = "Lootbox", data = { id = giftName }, uid = giftUid }
+        end
+
         local ok0A, res0A = pcall(Modules.LootboxCmds.Open, realObj, count)
         if ok0A and (res0A == true or (res0A ~= false and res0A ~= nil)) then
             opened = true
@@ -3515,14 +3619,22 @@ local function StepOpenFlannelGifts()
         end
     end
 
-    -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với tên và số lượng
+    -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với UID hoặc tên
     if not opened and Modules.Network and Modules.Network.Invoke then
         local ok1, res1 = pcall(function()
-            return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+            return Modules.Network.Invoke("Lootbox: Open", giftUid, count)
         end)
         debugRes.res1 = tostring(res1)
         if ok1 and res1 ~= false and res1 ~= nil then
             opened = true
+        end
+        if not opened then
+            local ok1A, res1A = pcall(function()
+                return Modules.Network.Invoke("Lootbox: Open", giftName, count)
+            end)
+            if ok1A and res1A ~= false and res1A ~= nil then
+                opened = true
+            end
         end
     end
 
@@ -3531,7 +3643,7 @@ local function StepOpenFlannelGifts()
         local rLoot = netFolder:FindFirstChild("Lootbox: Open")
         if rLoot and rLoot:IsA("RemoteFunction") then
             local ok1B, res1B = pcall(function()
-                return rLoot:InvokeServer(giftName, count)
+                return rLoot:InvokeServer(giftUid, count)
             end)
             debugRes.res1B = tostring(res1B)
             if ok1B and res1B ~= false and res1B ~= nil then
@@ -3539,7 +3651,7 @@ local function StepOpenFlannelGifts()
             end
             if not opened then
                 local ok1C, res1C = pcall(function()
-                    return rLoot:InvokeServer(giftUid, count)
+                    return rLoot:InvokeServer(giftName, count)
                 end)
                 debugRes.res1C = tostring(res1C)
                 if ok1C and res1C ~= false and res1C ~= nil then
@@ -3549,144 +3661,66 @@ local function StepOpenFlannelGifts()
         end
     end
 
-    -- Phương thức 2: Remote GiftBag_Open (chuẩn PS99: đối số 1 là giftName)
+    -- Phương thức 2: Remote GiftBag_Open & Lootables_Open với number argument trước (chuẩn ServerLootable)
     if not opened and Modules.Network and Modules.Network.Invoke then
-        local ok2A, res2A = pcall(function()
-            return Modules.Network.Invoke("GiftBag_Open", giftName, count)
+        pcall(function()
+            local res = Modules.Network.Invoke("Lootables_Open", count, giftName)
+            if res ~= false and res ~= nil then opened = true end
         end)
-        if ok2A and res2A ~= false and res2A ~= nil then
-            opened = true
-        end
-    end
-    if not opened and netFolder then
-        local rBag = netFolder:FindFirstChild("GiftBag_Open")
-        if rBag and rBag:IsA("RemoteFunction") then
-            local ok2B, res2B = pcall(function()
-                return rBag:InvokeServer(giftName, count)
-            end)
-            debugRes.res2 = tostring(res2B)
-            if ok2B and res2B ~= false and res2B ~= nil then
-                opened = true
-            end
-            if not opened then
-                local ok2C, res2C = pcall(function()
-                    return rBag:InvokeServer(giftUid, count)
-                end)
-                if ok2C and res2C ~= false and res2C ~= nil then
-                    opened = true
-                end
-            end
-        end
-    end
-
-    -- Phương thức 2B: Remote Event "Open Giftbag"
-    if not opened and netFolder then
-        local rOpenBag = netFolder:FindFirstChild("Open Giftbag")
-        if rOpenBag and rOpenBag:IsA("RemoteEvent") then
+        if not opened then
             pcall(function()
-                rOpenBag:FireServer(giftName, count)
+                local res = Modules.Network.Invoke("Lootables_Open", count, giftUid)
+                if res ~= false and res ~= nil then opened = true end
             end)
+        end
+        if not opened then
             pcall(function()
-                rOpenBag:FireServer(giftUid, count)
+                local res = Modules.Network.Invoke("GiftBag_Open", count, giftName)
+                if res ~= false and res ~= nil then opened = true end
+            end)
+        end
+        if not opened then
+            pcall(function()
+                local res = Modules.Network.Invoke("GiftBag_Open", count, giftUid)
+                if res ~= false and res ~= nil then opened = true end
             end)
         end
     end
 
-    -- Phương thức 3: Remote Lootables_Open (chuẩn PS99: đối số 1 là giftName)
-    if not opened and netFolder then
-        local rLootables = netFolder:FindFirstChild("Lootables_Open")
-        if rLootables and rLootables:IsA("RemoteFunction") then
-            local ok3, res3 = pcall(function()
-                return rLootables:InvokeServer(giftName, count)
+    -- Phương thức 3: Remote Tycoon YR_Hydrate & KX_Release (đối soát Dump Tycoon & Config VERBS)
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        pcall(function()
+            local res = Modules.Network.Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions)
+            if res == true or type(res) == "table" then opened = true end
+        end)
+        if not opened then
+            pcall(function()
+                local res = Modules.Network.Invoke("KX_Release", giftUid, count, positions)
+                if res == true or type(res) == "table" then opened = true end
             end)
-            debugRes.res3 = tostring(res3)
-            if ok3 and res3 ~= false and res3 ~= nil then
-                opened = true
-            end
         end
     end
-
-    -- Phương thức 4: Remote Tycoon YR_Hydrate (đối soát 100% trong dump Part 2)
     if not opened then
         pcall(function()
             local plot = GetMyPlot()
             if plot and plot.Invoke then
                 local res4A = plot:Invoke(NET.GiftOpen or "YR_Hydrate", count, positions)
-                if res4A == true or type(res4A) == "table" then
-                    opened = true
-                end
+                if res4A == true or type(res4A) == "table" then opened = true end
                 if not opened then
                     local res4B = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftUid, count, positions, true)
                     debugRes.res4 = tostring(res4B)
-                    if res4B == true or type(res4B) == "table" then
-                        opened = true
-                    end
+                    if res4B == true or type(res4B) == "table" then opened = true end
                 end
                 if not opened then
-                    local res4C = plot:Invoke(NET.GiftOpen or "YR_Hydrate", giftName, count, positions)
-                    if res4C == true or type(res4C) == "table" then
-                        opened = true
-                    end
+                    local res4C = plot:Invoke("KX_Release", count, positions)
+                    if res4C == true or type(res4C) == "table" then opened = true end
+                end
+                if not opened then
+                    local res4D = plot:Invoke("KX_Release", giftUid, count, positions)
+                    if res4D == true or type(res4D) == "table" then opened = true end
                 end
             end
         end)
-    end
-    if not opened and netFolder then
-        local rHydrate = netFolder:FindFirstChild("YR_Hydrate")
-        if rHydrate and rHydrate:IsA("RemoteFunction") then
-            local okH1, resH1 = pcall(function()
-                return rHydrate:InvokeServer(giftUid, count, positions, true)
-            end)
-            if okH1 and resH1 ~= false and resH1 ~= nil then
-                opened = true
-            end
-            if not opened then
-                local okH2, resH2 = pcall(function()
-                    return rHydrate:InvokeServer(giftUid, count, positions, false)
-                end)
-                if okH2 and resH2 ~= false and resH2 ~= nil then
-                    opened = true
-                end
-            end
-            if not opened then
-                local okH3, resH3 = pcall(function()
-                    return rHydrate:InvokeServer(giftName, count, positions, true)
-                end)
-                if okH3 and resH3 ~= false and resH3 ~= nil then
-                    opened = true
-                end
-            end
-        end
-    end
-
-    -- Phương thức 5: Remote Function PumpkinTycoon_GiftOpen
-    if not opened and Modules.Network and Modules.Network.Invoke then
-        local okPtNet, resPtNet = pcall(function()
-            return Modules.Network.Invoke("PumpkinTycoon_GiftOpen", giftName, count)
-        end)
-        if okPtNet and (resPtNet == true or type(resPtNet) == "table") then
-            opened = true
-        end
-    end
-    if not opened and netFolder then
-        local rPt = netFolder:FindFirstChild("PumpkinTycoon_GiftOpen")
-        if rPt and rPt:IsA("RemoteFunction") then
-            local okPt, resPt = pcall(function()
-                return rPt:InvokeServer(giftName, count)
-            end)
-            debugRes.resPt = tostring(resPt)
-            if okPt and (resPt == true or type(resPt) == "table") then
-                opened = true
-            end
-            if not opened then
-                local okPt2, resPt2 = pcall(function()
-                    return rPt:InvokeServer(giftUid, count)
-                end)
-                if okPt2 and (resPt2 == true or type(resPt2) == "table") then
-                    opened = true
-                end
-            end
-        end
     end
 
     DismissOopsPopups()
@@ -3696,11 +3730,11 @@ local function StepOpenFlannelGifts()
         Log("INFO", "🎁 [Flannel Gift] Mở thành công %dx %s! (Tổng đã mở: %d)", count, giftName, Runtime.Stats.GiftsOpened)
         pcall(CheckNewHugeWatcher)
     else
-        lastGiftAttempt = os.clock() + 3.0
-        Log("DEBUG", "🎁 [Flannel Gift] Mở %s (UID: %s) chưa hoàn tất. (1A=%s, 1B=%s, 1C=%s, 2=%s, 3=%s, 4=%s)",
+        lastGiftAttempt = os.clock() + 5.0
+        Log("DEBUG", "🎁 [Flannel Gift] Mở %s (UID: %s) chưa hoàn tất. (1A=%s, 1B=%s, 1C=%s, 4=%s)",
             giftName, tostring(giftUid),
             tostring(debugRes.res1), tostring(debugRes.res1B), tostring(debugRes.res1C),
-            tostring(debugRes.res3), tostring(debugRes.resPt), tostring(debugRes.res4))
+            tostring(debugRes.res4))
     end
 end
 
@@ -5162,7 +5196,7 @@ end
 
 local function GetHighestUnlockedFarmPosition(plot)
     local _, hrp = GetCharacter()
-    if activeFarmTarget and activeFarmTarget.pos then
+    if activeFarmTarget and activeFarmTarget.pos and not activeFarmTarget.isPedestal then
         return activeFarmTarget.pos, (activeFarmTarget.cf or CFrame.new(activeFarmTarget.pos + Vector3.new(0, 3, 0)))
     end
 
@@ -5172,31 +5206,21 @@ local function GetHighestUnlockedFarmPosition(plot)
         local highestZoneTarget = nil
         local maxZone = -1
         for _, t in ipairs(targets) do
-            local z = tonumber(t.zone) or 0
-            if z > maxZone then
-                maxZone = z
-                highestZoneTarget = t
+            if not t.isPedestal and not t.isBonus then
+                local z = tonumber(t.zone) or 0
+                if z > maxZone then
+                    maxZone = z
+                    highestZoneTarget = t
+                end
             end
         end
         if highestZoneTarget and highestZoneTarget.pos then
             return highestZoneTarget.pos, CFrame.new(highestZoneTarget.pos + Vector3.new(0, 3, 0))
         end
-        if targets[1] and targets[1].pos then
-            return targets[1].pos, CFrame.new(targets[1].pos + Vector3.new(0, 3, 0))
-        end
-    end
-
-    if pedInfo and pedInfo.slots and #pedInfo.slots > 0 then
-        local highestSlot = nil
-        local maxRung = -1
-        for _, s in ipairs(pedInfo.slots) do
-            if s.pos and (s.rung or 0) > maxRung then
-                maxRung = s.rung or 0
-                highestSlot = s
+        for _, t in ipairs(targets) do
+            if not t.isPedestal and t.pos then
+                return t.pos, CFrame.new(t.pos + Vector3.new(0, 3, 0))
             end
-        end
-        if highestSlot and highestSlot.pos then
-            return highestSlot.pos, CFrame.new(highestSlot.pos + Vector3.new(0, 3, 0))
         end
     end
 
