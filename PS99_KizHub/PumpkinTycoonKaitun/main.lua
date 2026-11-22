@@ -2663,6 +2663,19 @@ local function StepButtonsAndComplete(plot)
         end
     end
 
+    if Config.AutoCompleteTycoon and not Runtime.Cache.ClaimedPart2Complete then
+        local okP, done8, total8 = pcall(Modules.PumpkinButtonsUtil.Progress, buttons, 8, true)
+        if okP and done8 and total8 and done8 >= total8 and total8 > 0 then
+            local ok2, res2 = pcall(function()
+                return plot:Invoke(NET.Complete2)
+            end)
+            if ok2 and res2 ~= false then
+                Runtime.Cache.ClaimedPart2Complete = true
+                Log("INFO", "🎉 Claimed Tycoon Part 2 completion reward!")
+            end
+        end
+    end
+
     if not Config.AutoBuyButtons then
         return buttons, part1Complete, claimedComplete
     end
@@ -2774,6 +2787,19 @@ local function StepButtonsAndComplete(plot)
         if ok and res ~= false then
             Log("INFO", "Claimed Tycoon Part 1 completion reward!")
             buttons, part1Complete, claimedComplete = GetProgressState(plot)
+        end
+    end
+
+    if Config.AutoCompleteTycoon and not Runtime.Cache.ClaimedPart2Complete then
+        local okP, done8, total8 = pcall(Modules.PumpkinButtonsUtil.Progress, buttons, 8, true)
+        if okP and done8 and total8 and done8 >= total8 and total8 > 0 then
+            local ok2, res2 = pcall(function()
+                return plot:Invoke(NET.Complete2)
+            end)
+            if ok2 and res2 ~= false then
+                Runtime.Cache.ClaimedPart2Complete = true
+                Log("INFO", "🎉 Claimed Tycoon Part 2 completion reward!")
+            end
         end
     end
 
