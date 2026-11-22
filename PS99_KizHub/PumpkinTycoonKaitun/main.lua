@@ -262,6 +262,7 @@ end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS = ReplicatedStorage
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -1669,18 +1670,16 @@ end
 
 local function FindMachinePadCFrame(plot, machineName)
     local plotModel = plot and plot.GetModel and plot:GetModel()
-
-    local testNames = {
-        machineName,
-        "PadMarker_" .. tostring(machineName),
-    }
     local lName = tostring(machineName):lower()
-    if lName:find("cocoa") then
-        table.insert(testNames, "PadMarker_CocoaStand")
-        table.insert(testNames, "CocoaStand")
-        table.insert(testNames, "Hot Cocoa Stand")
-        table.insert(testNames, "PumpkinTycoonCocoaStand")
-        table.insert(testNames, "CocoaCabin_Zone")
+
+    local testNames = {}
+    if lName:find("upgrade") then
+        table.insert(testNames, "PadMarker_UpgradeMachine")
+        table.insert(testNames, "UpgradeMachine_Pad")
+        table.insert(testNames, "UpgradeMachine")
+        table.insert(testNames, "PumpkinTycoonUpgradeMachine")
+        table.insert(testNames, "Upgrade Machine")
+        table.insert(testNames, "PumpkinTycoonUpgrade")
     elseif lName:find("merchant") then
         table.insert(testNames, "PadMarker_Merchant")
         table.insert(testNames, "Merchant")
@@ -1689,12 +1688,9 @@ local function FindMachinePadCFrame(plot, machineName)
         table.insert(testNames, "PadMarker_PetNetStore")
         table.insert(testNames, "PetNetStore")
         table.insert(testNames, "NetStore")
-    elseif lName:find("upgrade") then
-        table.insert(testNames, "PadMarker_UpgradeMachine")
-        table.insert(testNames, "UpgradeMachine")
-        table.insert(testNames, "PumpkinTycoonUpgradeMachine")
-        table.insert(testNames, "Upgrade Machine")
-        table.insert(testNames, "PumpkinTycoonUpgrade")
+    else
+        table.insert(testNames, "PadMarker_" .. tostring(machineName))
+        table.insert(testNames, machineName)
     end
 
     local searchRoots = {}
@@ -1719,52 +1715,74 @@ local function FindMachinePadCFrame(plot, machineName)
             local found = root:FindFirstChild(n, true)
             if found then
                 if found:IsA("BasePart") then
-                    return found.CFrame + Vector3.new(0, 3, 0)
+                    -- Đứng trực tiếp trên mặt bệ (+1.2 studs) để chân chạm vào pad kích hoạt UI ngay tức thì
+                    return found.CFrame + Vector3.new(0, 1.2, 0), found
                 elseif found:IsA("Model") then
+                    -- Ưu tiên tuyệt đối tìm part Pad / PadMarker / Trigger nằm bên trong máy
+                    local pad = found:FindFirstChild("Pad", true)
+                        or found:FindFirstChild("PadMarker", true)
+                        or found:FindFirstChild("Trigger", true)
+                        or found:FindFirstChild("Platform", true)
+                        or found:FindFirstChild("Hitbox", true)
+                        or found:FindFirstChild("Floor", true)
+                        or found:FindFirstChild("Zone", true)
+                        or found:FindFirstChild("Stand", true)
+                    if pad and pad:IsA("BasePart") then
+                        return pad.CFrame + Vector3.new(0, 1.2, 0), pad
+                    end
                     if found.PrimaryPart then
-                        return found.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+                        return found.PrimaryPart.CFrame + Vector3.new(0, 1.2, 0), found.PrimaryPart
                     else
                         local p = found:FindFirstChildWhichIsA("BasePart", true)
                         if p then
-                            return p.CFrame + Vector3.new(0, 3, 0)
+                            return p.CFrame + Vector3.new(0, 1.2, 0), p
                         end
-                        return found:GetPivot() + Vector3.new(0, 3, 0)
+                        return found:GetPivot() + Vector3.new(0, 1.2, 0), found
                     end
                 end
             end
             if root:IsA("Model") then
                 local attr = root:GetAttribute(n)
                 if typeof(attr) == "CFrame" then
-                    return attr + Vector3.new(0, 3, 0)
+                    return attr + Vector3.new(0, 1.2, 0), nil
                 elseif typeof(attr) == "Vector3" then
-                    return CFrame.new(attr + Vector3.new(0, 3, 0))
+                    return CFrame.new(attr + Vector3.new(0, 1.2, 0)), nil
                 end
             end
         end
     end
-    return nil
+    return nil, nil
 end
 
 local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
     local _, hrp = GetCharacter()
     local prevCF = hrp and hrp.CFrame
-    local padCF = FindMachinePadCFrame(plot, machineName)
+    local padCF, padPart = FindMachinePadCFrame(plot, machineName)
     local moved = false
 
-    AcquireMoveLock(8)
+    AcquireMoveLock(15)
 
-    -- Nếu đứng xa máy (> 8 studs), tele tức thì đến bệ máy để thỏa mãn yêu cầu khoảng cách của server
-    if hrp and padCF and (hrp.Position - padCF.Position).Magnitude > 8 then
+    -- Teleport trực tiếp vào bệ máy
+    if hrp and padCF and (hrp.Position - padCF.Position).Magnitude > 3 then
         hrp.CFrame = padCF
         task.wait(0.2) -- Chờ server đồng bộ tọa độ nhân vật đứng trên máy
         moved = true
+    end
+
+    -- Kích hoạt Touch trực tiếp trên bệ pad để game bật UI tương tác
+    if hrp and padPart and padPart:IsA("BasePart") and type(firetouchinterest) == "function" then
+        pcall(firetouchinterest, hrp, padPart, 0)
+        task.wait(0.05)
+        pcall(firetouchinterest, hrp, padPart, 1)
     end
 
     local closeModal = type(opts) == "table" and opts.closeModal == true
     if closeModal then
         CloseMachineTab(machineName)
     end
+
     local ok, err = pcall(callback)
+
     if closeModal then
         CloseMachineTab(machineName)
         task.delay(0.2, function()
@@ -1774,7 +1792,7 @@ local function WithMachinePad(plot, machineName, rangeFn, callback, opts)
         end)
     end
 
-    -- Đưa nhân vật quay trở lại vị trí bãi farm ban đầu ngay lập tức
+    -- Đưa nhân vật quay trở lại vị trí bãi farm ban đầu khi xong tác vụ
     if moved and hrp and prevCF and IsRunning() then
         task.wait(0.08)
         hrp.CFrame = prevCF
@@ -3219,7 +3237,7 @@ local function StepUpgrades(plot, buttons)
             end
 
             -- 4. Thử trực tiếp qua ReplicatedStorage.Network["EventUpgrades: Purchase"]
-            local netFolder = RS:FindFirstChild("Network")
+            local netFolder = ReplicatedStorage:FindFirstChild("Network")
             if not bought and netFolder then
                 local rEvUp = netFolder:FindFirstChild("EventUpgrades: Purchase")
                 if rEvUp and rEvUp:IsA("RemoteFunction") then
@@ -3462,7 +3480,7 @@ local function StepOpenFlannelGifts()
         end)
     end
 
-    local netFolder = RS:FindFirstChild("Network")
+    local netFolder = ReplicatedStorage:FindFirstChild("Network")
 
     -- Phương thức 1: Remote chuẩn Lootbox PS99 ("Lootbox: Open") với tên và số lượng
     if not opened and Modules.Network and Modules.Network.Invoke then
@@ -4953,6 +4971,7 @@ local WildPetsState = {
     LastRestockAt = 0,
     LastHuntSyncAt = 0,
     CaughtCount = 0,
+    InitialServerCaught = nil,   -- Số pet server đã bắt trước khi script chạy
     RecentCatches = {},          -- [slotNum] = expireTimestamp (chống kẹt slot vừa bắt do client cache chưa kịp xóa)
     LastSightingCheckAt = 0,
     SavedFarmCF = nil,          -- Lưu vị trí bãi farm trước khi tele đi bắt pet
@@ -4961,8 +4980,25 @@ local WildPetsState = {
     IsCatchingSession = false,  -- Cờ trạng thái đang trong phiên tele bắt pet
 }
 
+local function GetTycoonCaughtCount(plot)
+    local count = 0
+    if plot and plot.Save then
+        local ok, c = pcall(plot.Save, plot, "Caught")
+        if ok and type(c) == "number" then
+            count = math.max(count, c)
+        end
+    end
+    if Modules.Save and Modules.Save.Get then
+        local okS, s = pcall(Modules.Save.Get)
+        if okS and type(s) == "table" and type(s.RoamingPetsCaught) == "number" then
+            count = math.max(count, s.RoamingPetsCaught)
+        end
+    end
+    return count
+end
+
 local function EnableNativeAutoFarm(zonePos)
-    local netFolder = RS:FindFirstChild("Network")
+    local netFolder = ReplicatedStorage:FindFirstChild("Network")
     pcall(function()
         if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Enable) == "function" then
             Modules.AutoFarmCmds.Enable()
@@ -4985,7 +5021,7 @@ local function EnableNativeAutoFarm(zonePos)
 end
 
 local function DisableNativeAutoFarm()
-    local netFolder = RS:FindFirstChild("Network")
+    local netFolder = ReplicatedStorage:FindFirstChild("Network")
     pcall(function()
         if Modules.AutoFarmCmds and type(Modules.AutoFarmCmds.Disable) == "function" then
             Modules.AutoFarmCmds.Disable()
@@ -5406,19 +5442,34 @@ local function StepWildPets(plot)
         end
     end
 
+    if not WildPetsState.InitialServerCaught then
+        WildPetsState.InitialServerCaught = GetTycoonCaughtCount(plot)
+    end
+    local serverBefore = GetTycoonCaughtCount(plot)
+    local targetSlot = targetPet.slot
+
     local isSuccess = okThrow and (resThrow == true or (type(resThrow) == "table" and (resThrow.Success == true or resThrow.Caught == true)))
-    if isSuccess then
-        WildPetsState.RecentCatches[targetPet.slot] = now + 25
-        WildPetsState.CaughtCount = WildPetsState.CaughtCount + 1
+
+    -- Chờ 0.15s để server đồng bộ phản hồi từ Auto Hunt của game
+    task.wait(0.15)
+    local serverAfter = GetTycoonCaughtCount(plot)
+    local wildDataNow = plot:Save(VAR.Wild) or (PT_Wild and PT_Wild.All and PT_Wild.All())
+    local slotDisappeared = type(wildDataNow) == "table" and (wildDataNow[targetSlot] == nil)
+
+    if isSuccess or (serverAfter > serverBefore) or slotDisappeared then
+        WildPetsState.RecentCatches[targetSlot] = now + 25
+        local delta = (WildPetsState.InitialServerCaught and serverAfter >= WildPetsState.InitialServerCaught)
+            and (serverAfter - WildPetsState.InitialServerCaught) or 0
+        WildPetsState.CaughtCount = math.max(WildPetsState.CaughtCount + 1, delta)
         Runtime.Stats.WildCaught = WildPetsState.CaughtCount
         Log("INFO", "🎯 [WildPets] %s BẮT THÀNH CÔNG pet slot #%d (%s, Shiny=%s, RB=%s, Gold=%s) bằng %s! (Tổng bắt: %d)",
             targetPet.isHuge and "🌟 [HUGE]" or "🐾",
-            targetPet.slot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
+            targetSlot, tostring(targetPet.petId), tostring(targetPet.isShiny), tostring(targetPet.isRainbow), tostring(targetPet.isGolden),
             netType, WildPetsState.CaughtCount)
     else
-        WildPetsState.RecentCatches[targetPet.slot] = now + 10
+        WildPetsState.RecentCatches[targetSlot] = now + 10
         Log("DEBUG", "[WildPets] Thử ném lưới slot #%d (%s, net: %s) -> Server: %s",
-            targetPet.slot, tostring(targetPet.petId), netType, tostring(resThrow))
+            targetSlot, tostring(targetPet.petId), netType, tostring(resThrow))
     end
 end
 -- ============================================================================
@@ -5465,7 +5516,7 @@ local function StepPetNetMerchant(plot)
 
             -- 4. Gọi qua hệ thống Merchant tiêu chuẩn PS99 ("PetNetStore")
             local offers = nil
-            local netF = RS:FindFirstChild("Network")
+            local netF = ReplicatedStorage:FindFirstChild("Network")
             if Modules.Network and Modules.Network.Invoke then
                 local okO, resO = pcall(Modules.Network.Invoke, "Merchant_GetOffers", "PetNetStore")
                 if okO and type(resO) == "table" then offers = resO end
@@ -6156,7 +6207,7 @@ local function StepFreeGifts()
             end
             -- Cách 3: Remote trực tiếp trong ReplicatedStorage.Network
             if not claimed then
-                local netF = RS:FindFirstChild("Network")
+                local netF = ReplicatedStorage:FindFirstChild("Network")
                 local r = netF and netF:FindFirstChild("Redeem Free Gift")
                 if r then
                     if r:IsA("RemoteFunction") then
@@ -6326,7 +6377,17 @@ local function UpdateMiniGui()
         local tokens = GetCurrency((PT and PT.TOKENS) or "PumpkinTokens") or 0
         local hatched = (Runtime and Runtime.Stats and Runtime.Stats.EggsHatched) or 0
         local gifts = (Runtime and Runtime.Stats and Runtime.Stats.GiftsOpened) or 0
-        local wildCaught = (Runtime and Runtime.Stats and Runtime.Stats.WildCaught) or 0
+        local plot = GetMyPlot()
+        local serverCaught = GetTycoonCaughtCount(plot)
+        local delta = (WildPetsState and WildPetsState.InitialServerCaught and serverCaught >= WildPetsState.InitialServerCaught)
+            and (serverCaught - WildPetsState.InitialServerCaught) or 0
+        local wildCaught = math.max(Runtime and Runtime.Stats and Runtime.Stats.WildCaught or 0, WildPetsState and WildPetsState.CaughtCount or 0, delta)
+        if wildCaught == 0 and serverCaught > 0 then
+            wildCaught = serverCaught
+        end
+        if Runtime and Runtime.Stats then
+            Runtime.Stats.WildCaught = wildCaught
+        end
         local nextBtn = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonName) or "Đang quét..."
         local missing = (Runtime and Runtime.Stats and Runtime.Stats.MissingCoins) or 0
         local cost = (Runtime and Runtime.Stats and Runtime.Stats.NextButtonCost) or 0
