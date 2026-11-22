@@ -75,6 +75,11 @@ local DEFAULT_CONFIG = {
 
     -- Free Gifts (12 Mốc Quà Miễn Phí Tích Lũy Gems)
     AutoClaimFreeGifts = true,
+    FreeGiftInterval = 25,          -- Quét nhận 12 mốc quà Free Gifts mỗi 25s
+
+    -- Mailbox (Tự Động Nhận Thư / Claim All Mail Đến Hòm Thư)
+    AutoClaimMail = true,
+    AutoClaimMailInterval = 30,     -- Quét nhận thư đến mỗi 30s
 
     -- Auto Buffs Phụ Trợ (Trái Cây, Potions, Đồ Chơi - TUYỆT ĐỐI KHÔNG CẮM CỜ)
     AutoBuffs = {
@@ -288,6 +293,8 @@ local Runtime = {
         TeamPowerWeakest = 0,
         TeamPowerBest = 0,
         GiftsOpened = 0,
+        FreeGiftsClaimed = 0,
+        MailClaimed = 0,
         PetSpeedMult = 1,
         AfkPulsesRoblox = 0,
         AfkPulsesP99 = 0,
@@ -3128,31 +3135,33 @@ local function BuildGiftPositions(amount)
 end
 
 local lastGiftAttempt = 0
+local lastGiftScanLog = 0
 local function StepOpenFlannelGifts()
     if not Config.AutoOpenGifts or not Modules.Network then
         return
     end
-    if os.clock() - lastGiftAttempt < 0.35 then
+    if os.clock() - lastGiftAttempt < 1.0 then
         return
     end
 
     local giftName = (Modules.ButtonsTypes and Modules.ButtonsTypes.COMPLETION_GIFT) or "Flannel Gift"
-    local giftUid, giftAmt = nil, 0
+    local giftUid, giftAmt, giftCategory = nil, 0, nil
 
-    -- 1. Quét tìm trực tiếp trong Save.Inventory.Lootbox (Túi đồ -> Mục Lootbox / Quà tặng)
+    -- 1. Quét sâu toàn bộ Inventory (quét mọi mục: Lootbox, Consumable, Gift, Box, Misc, Egg...)
     if Modules.Save and Modules.Save.Get then
         pcall(function()
             local inv = Modules.Save.Get().Inventory
             if type(inv) ~= "table" then return end
-            local containers = { inv.Lootbox, inv.Gift, inv.Box, inv.Lootboxes, inv.Misc }
-            for _, boxContainer in ipairs(containers) do
-                if type(boxContainer) == "table" then
-                    for uid, d in pairs(boxContainer) do
+            for catName, catTable in pairs(inv) do
+                if type(catTable) == "table" and catName ~= "Pet" and catName ~= "Currency" then
+                    for uid, d in pairs(catTable) do
                         if type(d) == "table" then
                             local boxId = tostring(d.id or d._id or d.Name or "")
-                            if string.find(string.lower(boxId), "flannel") then
+                            local lower = boxId:lower()
+                            if lower:find("flannel") or boxId == giftName or (lower:find("gift") and not lower:find("free")) then
                                 giftUid = tostring(uid or d._uid or d.uid or "")
                                 giftName = boxId
+                                giftCategory = catName
                                 giftAmt = tonumber(d._am or d.amount or d.Count) or 1
                                 break
                             end
@@ -3172,6 +3181,7 @@ local function StepOpenFlannelGifts()
             if first then
                 giftUid = first:GetUID()
                 giftAmt = first:GetAmount()
+                giftCategory = "LootboxItem"
             end
         end)
     end
@@ -3185,33 +3195,37 @@ local function StepOpenFlannelGifts()
 
     lastGiftAttempt = os.clock()
     local opened = false
+    local debugRes = {}
 
     -- Phương thức 1: Trực tiếp gọi RemoteFunction ReplicatedStorage.Network.YR_Hydrate khớp 100% Spy
     local yrHydrate = (RS:FindFirstChild("Network") and RS.Network:FindFirstChild("YR_Hydrate")) or (Modules.Network and Modules.Network.YR_Hydrate)
     if yrHydrate and yrHydrate:IsA("RemoteFunction") then
-        -- 1A: Gọi chuẩn theo game client: (giftUid, count, positions, false)
+        -- 1A: Thử gọi chuẩn theo game client: (giftUid, count, positions, false)
         local ok1, res1 = pcall(function()
             return yrHydrate:InvokeServer(giftUid, count, positions, false)
         end)
+        debugRes.res1 = tostring(res1)
         if ok1 and (res1 == true or type(res1) == "table") then
             opened = true
         end
 
-        -- 1B: Nếu vị trí đất kẹt va chạm -> Gọi với cờ true (Instant Open / Skip Placement)
+        -- 1B: Nếu vị trí đất kẹt va chạm -> Thử gọi với cờ true (Instant Open / Skip Placement)
         if not opened then
             local ok1B, res1B = pcall(function()
                 return yrHydrate:InvokeServer(giftUid, count, positions, true)
             end)
+            debugRes.res1B = tostring(res1B)
             if ok1B and (res1B == true or type(res1B) == "table") then
                 opened = true
             end
         end
 
-        -- 1C: Gọi với positions rỗng và cờ true
+        -- 1C: Gọi với positions rỗng và cờ true (Tránh hoàn toàn lỗi raycast mặt đất)
         if not opened then
             local ok1C, res1C = pcall(function()
                 return yrHydrate:InvokeServer(giftUid, count, {}, true)
             end)
+            debugRes.res1C = tostring(res1C)
             if ok1C and (res1C == true or type(res1C) == "table") then
                 opened = true
             end
@@ -3221,11 +3235,13 @@ local function StepOpenFlannelGifts()
     -- Phương thức 2: Gọi qua Modules.Network.Invoke("YR_Hydrate", ...)
     if not opened and Modules.Network and Modules.Network.Invoke then
         local ok2A, res2A = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, positions, false)
+        debugRes.res2A = tostring(res2A)
         if ok2A and (res2A == true or type(res2A) == "table") then
             opened = true
         end
         if not opened then
-            local ok2B, res2B = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, positions, true)
+            local ok2B, res2B = pcall(Modules.Network.Invoke, "YR_Hydrate", giftUid, count, {}, true)
+            debugRes.res2B = tostring(res2B)
             if ok2B and (res2B == true or type(res2B) == "table") then
                 opened = true
             end
@@ -3237,8 +3253,9 @@ local function StepOpenFlannelGifts()
         pcall(function()
             local plot = GetMyPlot()
             if plot and plot.Invoke then
-                local res = plot:Invoke(NET.GiftOpen, giftUid, count, positions, false)
-                if res == true or type(res) == "table" then
+                local res3 = plot:Invoke(NET.GiftOpen, giftUid, count, positions, false)
+                debugRes.res3 = tostring(res3)
+                if res3 == true or type(res3) == "table" then
                     opened = true
                 end
             end
@@ -3246,19 +3263,37 @@ local function StepOpenFlannelGifts()
     end
 
     -- Phương thức 4: Remote Lootbox tiêu chuẩn PS99 ("Lootbox: Open")
-    if not opened then
+    if not opened and Modules.Network and Modules.Network.Invoke then
         local ok4, res4 = pcall(function()
             return Modules.Network.Invoke("Lootbox: Open", giftName, count)
         end)
+        debugRes.res4 = tostring(res4)
         if ok4 and res4 ~= false then
+            opened = true
+        end
+    end
+
+    -- Phương thức 5: Remote Gift tiêu chuẩn PS99 ("Gift: Open")
+    if not opened and Modules.Network and Modules.Network.Invoke then
+        local ok5, res5 = pcall(function()
+            return Modules.Network.Invoke("Gift: Open", giftUid, count)
+        end)
+        debugRes.res5 = tostring(res5)
+        if ok5 and res5 ~= false then
             opened = true
         end
     end
 
     if opened then
         Runtime.Stats.GiftsOpened = Runtime.Stats.GiftsOpened + count
-        Log("INFO", "🎁 Opened %dx %s from Lootboxes! (Total: %d)", count, giftName, Runtime.Stats.GiftsOpened)
+        Log("INFO", "🎁 [Flannel Gift] Mở thành công %dx %s! (Tổng đã mở: %d)", count, giftName, Runtime.Stats.GiftsOpened)
         pcall(CheckNewHugeWatcher)
+    else
+        -- Backoff 4s khi thất bại để tránh spam remote
+        lastGiftAttempt = os.clock() + 4.0
+        Log("WARN", "🎁 [Flannel Gift] Thử mở %s (UID: %s, Mục: %s) chưa thành công! (1A=%s, 1B=%s, 1C=%s, 2A=%s, 4=%s, 5=%s)",
+            giftName, tostring(giftUid), tostring(giftCategory),
+            tostring(debugRes.res1), tostring(debugRes.res1B), tostring(debugRes.res1C), tostring(debugRes.res2A), tostring(debugRes.res4), tostring(debugRes.res5))
     end
 end
 
@@ -5273,15 +5308,83 @@ end
 
 
 -- ============================================================================
--- 12C. FREE GIFTS, AUTO BUFFS (FRUITS/POTIONS/TOYS) & MINI GUI (KIZHUB SUITE)
+-- 12C. MAILBOX CLAIM, FREE GIFTS & AUTO BUFFS (KIZHUB SUITE)
 -- ============================================================================
+
+-- 0. Tự động nhận thư đến từ Mailbox (Claim All Mail & Auto Collect Gifts/Gems)
+local lastMailClaimCheck = 0
+local function StepClaimMail()
+    if not Config.AutoClaimMail or not Modules.Network then return end
+    local now = os.clock()
+    local interval = tonumber(Config.AutoClaimMailInterval) or 30
+    if now - lastMailClaimCheck < interval then return end
+    lastMailClaimCheck = now
+
+    pcall(function()
+        pcall(function()
+            Modules.Network.Fire("Machines: Mark Approached", "Mailbox")
+        end)
+        task.wait(0.1)
+
+        local claimedAny = false
+
+        -- Cách 1: Remote chuẩn PS99 "Mailbox: Claim All"
+        local okAll, resAll = pcall(Modules.Network.Invoke, "Mailbox: Claim All")
+        if okAll and (resAll == true or (type(resAll) == "table" and next(resAll) ~= nil)) then
+            claimedAny = true
+            Log("INFO", "📬 [Mailbox] Đã tự động nhận tất cả thư/quà trong Hòm Thư thành công!")
+        end
+
+        -- Cách 2: Client module MailboxCmds.ClaimAll()
+        if not claimedAny then
+            local RS = game:GetService("ReplicatedStorage")
+            local MailboxCmds = Modules.MailboxCmds
+            if not MailboxCmds then
+                pcall(function()
+                    MailboxCmds = require(RS.Library.Client.MailboxCmds)
+                    Modules.MailboxCmds = MailboxCmds
+                end)
+            end
+            if MailboxCmds and type(MailboxCmds.ClaimAll) == "function" then
+                local okCmd, resCmd = pcall(MailboxCmds.ClaimAll)
+                if okCmd and (resCmd == true or (type(resCmd) == "table" and next(resCmd) ~= nil)) then
+                    claimedAny = true
+                    Log("INFO", "📬 [Mailbox] Nhận thư thành công qua MailboxCmds.ClaimAll()!")
+                end
+            end
+        end
+
+        -- Cách 3: Quét danh sách thư đến và nhận từng thư lẻ
+        if not claimedAny then
+            local s = Modules.Save and Modules.Save.Get and Modules.Save.Get()
+            local mails = s and (s.Mail or s.ReceivedMail or s.Inbox)
+            if type(mails) == "table" then
+                for mailId, mailData in pairs(mails) do
+                    if type(mailData) == "table" and not mailData.Claimed then
+                        local okOne, resOne = pcall(Modules.Network.Invoke, "Mailbox: Claim", mailId)
+                        if okOne and resOne == true then
+                            claimedAny = true
+                            Log("INFO", "📬 [Mailbox] Đã nhận thư #%s thành công!", tostring(mailId))
+                        end
+                        task.wait(0.08)
+                    end
+                end
+            end
+        end
+
+        if claimedAny then
+            Runtime.Stats.MailClaimed = (Runtime.Stats.MailClaimed or 0) + 1
+        end
+    end)
+end
 
 -- 1. Tự động nhận 12 mốc quà Free Gifts định kỳ (tích lũy Gems trả cước AutoMail)
 local lastFreeGiftCheck = 0
 local function StepFreeGifts()
     if not Config.AutoClaimFreeGifts or not Modules.Network then return end
     local now = os.clock()
-    if now - lastFreeGiftCheck < 90 then return end
+    local interval = tonumber(Config.FreeGiftInterval) or 25
+    if now - lastFreeGiftCheck < interval then return end
     lastFreeGiftCheck = now
 
     pcall(function()
@@ -5294,24 +5397,41 @@ local function StepFreeGifts()
             end)
         end
 
+        local claimedCount = 0
         for i = 1, 12 do
             local claimed = false
+            -- Cách 1: FreeGiftsCmds.Claim(i)
             if FreeGiftsCmds and type(FreeGiftsCmds.Claim) == "function" then
                 local ok, res = pcall(FreeGiftsCmds.Claim, i)
-                if ok and res == true then claimed = true end
+                if ok and (res == true or (type(res) == "table" and res.Success)) then
+                    claimed = true
+                end
             end
+            -- Cách 2: Network.Invoke("Redeem Free Gift", i)
             if not claimed then
                 local okInv, resInv = pcall(Modules.Network.Invoke, "Redeem Free Gift", i)
-                if okInv and resInv == true then claimed = true end
+                if okInv and (resInv == true or type(resInv) == "table") then
+                    claimed = true
+                end
             end
+            -- Cách 3: Remote trực tiếp trong ReplicatedStorage.Network
             if not claimed then
                 local r = RS:FindFirstChild("Network") and RS.Network:FindFirstChild("Redeem Free Gift")
                 if r then
-                    if r:IsA("RemoteFunction") then pcall(function() r:InvokeServer(i) end)
-                    elseif r:IsA("RemoteEvent") then pcall(function() r:FireServer(i) end) end
+                    if r:IsA("RemoteFunction") then
+                        local okR, resR = pcall(function() return r:InvokeServer(i) end)
+                        if okR and resR == true then claimed = true end
+                    elseif r:IsA("RemoteEvent") then
+                        pcall(function() r:FireServer(i) end)
+                    end
                 end
             end
-            task.wait(0.08)
+            if claimed then
+                claimedCount = claimedCount + 1
+                Runtime.Stats.FreeGiftsClaimed = (Runtime.Stats.FreeGiftsClaimed or 0) + 1
+                Log("INFO", "🎁 [Free Gifts] Đã nhận thành công quà mốc #%d!", i)
+            end
+            task.wait(0.06)
         end
     end)
 end
@@ -5687,6 +5807,7 @@ local function StartLoops()
                 StepCraftPets(plot, buttons)
                 StepEventPass()
                 StepFreeGifts()
+                StepClaimMail()
                 StepAutoBuffs()
             end)
             if not ok then
@@ -5766,6 +5887,7 @@ local function StartLoops()
         Log("INFO", "AutoMail loop started.")
         task.wait(15)
         while IsRunning() do
+            pcall(StepClaimMail)
             pcall(StepAutoMail)
             task.wait(30)
         end
@@ -5832,6 +5954,8 @@ local function StartLoops()
                         { name = "🥚 Tổng Trứng Đã Mở", value = ShortenNumber(hatched), inline = true },
                         { name = "🐾 Thú Hoang Đã Bắt", value = ShortenNumber(wild), inline = true },
                         { name = "🎁 Flannel Gifts Mở", value = ShortenNumber(gifts), inline = true },
+                        { name = "🎁 Free Gifts", value = tostring(Runtime and Runtime.Stats and Runtime.Stats.FreeGiftsClaimed or 0), inline = true },
+                        { name = "📬 Thư Đã Nhận", value = tostring(Runtime and Runtime.Stats and Runtime.Stats.MailClaimed or 0), inline = true },
                         { name = "🔘 Tiến Độ Nút", value = tostring(nextBtn), inline = false },
                         { name = "📦 AutoMail", value = tostring(MailState and MailState.Status or "Sẵn sàng"), inline = true },
                     }
